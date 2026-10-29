@@ -15,7 +15,7 @@ public sealed class ClipboardPrivacyTests
 	public async Task ClipboardReadAtOpen_ReadsOnce_AndStoresOnlyInMemory()
 	{
 		PickerSession session = NewSession();
-		session.ConfigureClipboardHooksForTests(async () => "https://clipboard.example/", _ => { });
+		session.ConfigureClipboardHooksForTests(() => Task.FromResult<string?>("https://clipboard.example/"), _ => { });
 
 		await session.CaptureClipboardAtOpenForTestsAsync();
 		await session.CaptureClipboardAtOpenForTestsAsync();
@@ -90,10 +90,10 @@ public sealed class ClipboardPrivacyTests
 		bool readCalled = false;
 		PickerSession session = NewSession(options: new PickerClipboardOptions(ClipboardReadAtOpenEnabled: false));
 		session.ConfigureClipboardHooksForTests(
-			async () =>
+			() =>
 			{
 				readCalled = true;
-				return "https://clipboard.example/";
+				return Task.FromResult<string?>("https://clipboard.example/");
 			},
 			_ => { });
 
