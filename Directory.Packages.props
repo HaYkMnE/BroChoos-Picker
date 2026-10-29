@@ -20,7 +20,7 @@
     <PackageVersion Include="xunit.runner.visualstudio" Version="3.0.0" />
     <PackageVersion Include="Xunit.SkippableFact" Version="1.5.61" />
     <PackageVersion Include="FluentAssertions" Version="6.12.2" />
-    <PackageVersion Include="coverlet.collector" Version="6.0.2" />
+    <PackageVersion Include="coverlet.collector" Version="10.1.0" />
     <!-- TEST-ONLY: the C# tokenizer behind the network-boundary source scan in
          BroChoos.Architecture.Tests. No src project may reference it. 5.3.0 is the Roslyn
          that ships inside the 10.0.2xx SDK (compiler 5.3.0-2.26153), so the scan parses the
