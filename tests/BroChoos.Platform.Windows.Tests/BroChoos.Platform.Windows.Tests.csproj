@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <!-- Must match BroChoos.Platform.Windows' platform version (project reference compatibility). -->
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\BroChoos.Platform.Windows\BroChoos.Platform.Windows.csproj" />
+    <ProjectReference Include="..\..\src\BroChoos.Core\BroChoos.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" PrivateAssets="all" />
+    <!-- xUnit 2.9.2 cannot interpret its v3 dynamic-skip token. This established,
+         test-only package supplies a v2 test case that reports runtime skips honestly. -->
+    <PackageReference Include="Xunit.SkippableFact" PrivateAssets="all" />
+    <PackageReference Include="FluentAssertions" />
+    <PackageReference Include="coverlet.collector" PrivateAssets="all" />
+    <!-- The DI composition test builds a REAL ServiceProvider, so it needs the container
+         implementation (BuildServiceProvider/ServiceProviderOptions) and a logging
+         provider, not just the abstractions the product projects reference. Both versions
+         are already pinned in Directory.Packages.props; no new package is introduced. -->
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
+    <PackageReference Include="Microsoft.Extensions.Logging" />
+  </ItemGroup>
+</Project>

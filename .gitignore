@@ -1,0 +1,55 @@
+# Build artifacts
+[Bb]in/
+[Oo]bj/
+[Oo]ut/
+[Pp]ublish/
+[Oo]utput/
+[Dd]ist/
+artifacts/
+*.binlog
+
+# JS tooling
+node_modules/
+
+# User/IDE files
+*.user
+*.suo
+*.userprefs
+.vs/
+.vscode/*
+!.vscode/settings.json
+!.vscode/launch.json
+!.vscode/tasks.json
+.idea/
+*.swp
+
+# Test results
+TestResults/
+coverage/
+*.coverage
+*.coveragexml
+*.trx
+
+# Local secrets and dumps
+*.pfx
+*.snk
+*.key
+*.pem
+secrets.json
+appsettings.Local.json
+.env
+.env.*
+!.env.example
+auth.json
+credentials*.json
+*.dmp
+*.mdmp
+*.log
+local-config/
+private-notes/
+config-dumps/
+
+# OS
+Thumbs.db
+.DS_Store
+desktop.ini

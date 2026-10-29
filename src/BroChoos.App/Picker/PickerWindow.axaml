@@ -1,0 +1,437 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:p="clr-namespace:BroChoos.App.Picker"
+        x:Class="BroChoos.App.Picker.PickerWindow"
+        x:Name="PickerWindowRoot"
+        Title="BroChoos"
+        Icon="avares://BroChoos/Assets/brochoos.ico"
+        Width="460"
+        SystemDecorations="None"
+        Topmost="True"
+        CanResize="False"
+        ShowInTaskbar="False"
+        WindowStartupLocation="Manual"
+        SizeToContent="Manual"
+        Background="{DynamicResource bc.bg.base}"
+        Foreground="{DynamicResource bc.text.primary}"
+        FontFamily="{DynamicResource bc.font.ui}">
+  <Window.Resources>
+    <ResourceDictionary>
+      <ResourceDictionary.MergedDictionaries>
+        <ResourceInclude Source="avares://BroChoos/Picker/PickerTokens.axaml" />
+      </ResourceDictionary.MergedDictionaries>
+    </ResourceDictionary>
+  </Window.Resources>
+  <!--
+    0A-3 minimal Picker shell (D-125): three zones.
+    Zone 1 link card (host + short readable URL, long queries collapsed),
+    zone 2 one choice card per detected candidate (slot + browser id/name),
+    zone 3 bottom bar (status line over the permanent key hints: Ctrl+C, Esc).
+    Fixed explicit palette on purpose: a borderless window cannot fall back to
+    window chrome, and missing theme resource keys would render transparent.
+  -->
+  <Window.Styles>
+    <Style Selector="Border.card">
+       <Setter Property="Background" Value="{DynamicResource bc.bg.card}"/>
+       <Setter Property="BorderBrush" Value="{DynamicResource bc.border.subtle}"/>
+      <Setter Property="BorderThickness" Value="1"/>
+       <Setter Property="CornerRadius" Value="{DynamicResource bc.radius.card}"/>
+    </Style>
+    <!-- PICKER TILE (docs/design/PICKER-LAYOUT-SPEC.md): icon plate over the browser name, nothing
+         else. Quiet at rest (no fill, no outline - the window is the surface, so there is no
+         card-in-card); hover fills with the subtle surface; focus draws the two-token ring. -->
+    <Style Selector="Button.choiceCard">
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="BorderBrush" Value="Transparent"/>
+      <Setter Property="BorderThickness" Value="1"/>
+      <Setter Property="CornerRadius" Value="{DynamicResource bc.radius.card}"/>
+      <Setter Property="Padding" Value="8"/>
+      <Setter Property="Width" Value="{DynamicResource bc.tile.width}"/>
+      <Setter Property="Height" Value="{DynamicResource bc.tile.height}"/>
+      <Setter Property="MinHeight" Value="48"/>
+      <Setter Property="Margin" Value="{DynamicResource bc.tile.margin}"/>
+      <Setter Property="HorizontalContentAlignment" Value="Center"/>
+      <Setter Property="VerticalContentAlignment" Value="Top"/>
+    </Style>
+    <!-- When any tile shows a profile line, every tile in the window grows by that line, so the
+         row keeps one height and the browser name keeps its two lines. -->
+    <Style Selector="ItemsControl.withProfiles Button.choiceCard">
+      <Setter Property="Height" Value="{DynamicResource bc.tile.heightWithProfile}"/>
+    </Style>
+    <Style Selector="Button.choiceCard:pointerover">
+       <Setter Property="Background" Value="{DynamicResource bc.bg.subtle}"/>
+    </Style>
+    <!-- All W5.1 buttons retain a visible two-token focus treatment. No activation waits on motion. -->
+    <Style Selector="Button:focus-visible">
+       <Setter Property="BorderBrush" Value="{DynamicResource bc.focus.outer}"/>
+       <Setter Property="BorderThickness" Value="2"/>
+       <Setter Property="Background" Value="{DynamicResource bc.focus.inner}"/>
+       <!-- The inner token is the one-pixel separation surface; the control border remains the outer ring. -->
+       <Setter Property="Padding" Value="3"/>
+    </Style>
+    <!-- D-139: a strong focus indicator exists at all times on the focused tile. Border 1->2 and
+         padding 8->7 together, so focusing a tile never moves its icon or name by a pixel. -->
+    <Style Selector="Button.choiceCard:focus-visible">
+      <Setter Property="BorderBrush" Value="{DynamicResource bc.focus.outer}"/>
+      <Setter Property="BorderThickness" Value="2"/>
+      <Setter Property="Background" Value="{DynamicResource bc.focus.inner}"/>
+      <Setter Property="Padding" Value="7"/>
+    </Style>
+    <!-- Placeholder icon plate: the browser's first letter. Phase 2 puts the real program icon
+         on this same 48 DIP plate; the letter stays as the fallback when no icon can be read. -->
+    <Style Selector="Border.iconPlate">
+      <Setter Property="Width" Value="{DynamicResource bc.tile.icon}"/>
+      <Setter Property="Height" Value="{DynamicResource bc.tile.icon}"/>
+      <Setter Property="Background" Value="{DynamicResource bc.bg.card}"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource bc.border.subtle}"/>
+      <Setter Property="BorderThickness" Value="1"/>
+      <Setter Property="CornerRadius" Value="{DynamicResource bc.radius.card}"/>
+      <Setter Property="HorizontalAlignment" Value="Center"/>
+    </Style>
+    <Style Selector="Border.iconPlate > TextBlock">
+      <Setter Property="Foreground" Value="{DynamicResource bc.text.secondary}"/>
+      <Setter Property="FontSize" Value="{DynamicResource bc.type.title}"/>
+      <Setter Property="FontWeight" Value="SemiBold"/>
+      <Setter Property="HorizontalAlignment" Value="Center"/>
+      <Setter Property="VerticalAlignment" Value="Center"/>
+    </Style>
+    <Style Selector="TextBlock.tileName">
+      <Setter Property="FontSize" Value="{DynamicResource bc.type.caption}"/>
+      <Setter Property="LineHeight" Value="{DynamicResource bc.type.caption.lineHeight}"/>
+      <Setter Property="TextAlignment" Value="Center"/>
+      <Setter Property="TextWrapping" Value="Wrap"/>
+      <Setter Property="MaxLines" Value="2"/>
+      <Setter Property="TextTrimming" Value="CharacterEllipsis"/>
+      <Setter Property="HorizontalAlignment" Value="Center"/>
+    </Style>
+    <Style Selector="TextBlock.muted">
+       <Setter Property="Foreground" Value="{DynamicResource bc.text.secondary}"/>
+    </Style>
+    <!-- First-run actions. One accent-filled primary; secondaries are outlined on the card
+         surface so the screen has exactly one committed accent. 44 DIP minimum target. -->
+    <Style Selector="Button.primary, Button.secondary">
+      <Setter Property="MinHeight" Value="{DynamicResource bc.target.min}"/>
+      <Setter Property="CornerRadius" Value="{DynamicResource bc.radius.control}"/>
+      <Setter Property="BorderThickness" Value="1"/>
+      <Setter Property="HorizontalContentAlignment" Value="Center"/>
+      <Setter Property="VerticalContentAlignment" Value="Center"/>
+      <Setter Property="Padding" Value="12,8"/>
+      <Setter Property="FontWeight" Value="SemiBold"/>
+    </Style>
+    <Style Selector="Button.primary">
+      <Setter Property="Background" Value="{DynamicResource bc.accent.default}"/>
+      <Setter Property="Foreground" Value="{DynamicResource bc.accent.onAccent}"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource bc.accent.default}"/>
+    </Style>
+    <Style Selector="Button.primary:pointerover /template/ ContentPresenter">
+      <Setter Property="Background" Value="{DynamicResource bc.accent.hover}"/>
+      <Setter Property="Foreground" Value="{DynamicResource bc.accent.onAccent}"/>
+    </Style>
+    <Style Selector="Button.primary:pressed /template/ ContentPresenter">
+      <Setter Property="Background" Value="{DynamicResource bc.accent.pressed}"/>
+      <Setter Property="Foreground" Value="{DynamicResource bc.accent.onAccent}"/>
+    </Style>
+    <Style Selector="Button.secondary">
+      <Setter Property="Background" Value="{DynamicResource bc.bg.base}"/>
+      <Setter Property="Foreground" Value="{DynamicResource bc.text.primary}"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource bc.border.strong}"/>
+    </Style>
+    <Style Selector="Button.secondary:pointerover /template/ ContentPresenter">
+      <Setter Property="Background" Value="{DynamicResource bc.bg.subtle}"/>
+      <Setter Property="Foreground" Value="{DynamicResource bc.text.primary}"/>
+    </Style>
+    <!-- The focused first-run button keeps its own fill (the generic Button:focus-visible
+         rule above swaps the fill to the inner focus surface, which would erase the primary
+         accent); the ring is the two-pixel outer focus token instead. -->
+    <Style Selector="Button.primary:focus-visible, Button.secondary:focus-visible">
+      <Setter Property="BorderBrush" Value="{DynamicResource bc.focus.outer}"/>
+      <Setter Property="BorderThickness" Value="2"/>
+      <Setter Property="Padding" Value="11,7"/>
+    </Style>
+    <!-- TWO-TONE RING ON THE PRIMARY. One colour cannot clear 3:1 against both the window and
+         the accent fill in Dark (white on the Dark accent is 2.14:1; the luminance a single ring would
+         need is <= 0.114 for the fill and >= 0.143 for the window - no colour satisfies both).
+         So the 2 DIP border becomes the INNER token (the separation next to the fill) and the
+         outer token is drawn as a 2 DIP solid spread outside it (bc.focus.ring.primary, the
+         same colour as bc.focus.outer). Geometry is unchanged: the shadow takes no layout. -->
+    <Style Selector="Button.primary:focus-visible">
+      <Setter Property="Background" Value="{DynamicResource bc.accent.default}"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource bc.focus.inner}"/>
+    </Style>
+    <Style Selector="Button.primary:focus-visible /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="BoxShadow" Value="{DynamicResource bc.focus.ring.primary}"/>
+    </Style>
+    <Style Selector="Button.secondary:focus-visible">
+      <Setter Property="Background" Value="{DynamicResource bc.bg.base}"/>
+    </Style>
+    <!-- The "?" hint toggle: a quiet 28 DIP square, visually a key cap. -->
+    <Style Selector="Button.hintToggle">
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="Foreground" Value="{DynamicResource bc.text.secondary}"/>
+      <!-- border.strong, not border.subtle: the key-cap outline is what identifies this as a
+           control, so it needs 3:1 against the window (subtle was 1.32 Light / 1.50 Dark). The
+           token itself is left alone - it is also the quiet card border, which must stay quiet. -->
+      <Setter Property="BorderBrush" Value="{DynamicResource bc.border.strong}"/>
+      <Setter Property="BorderThickness" Value="1"/>
+      <Setter Property="CornerRadius" Value="{DynamicResource bc.radius.control}"/>
+      <Setter Property="MinWidth" Value="28"/>
+      <Setter Property="MinHeight" Value="28"/>
+      <Setter Property="Padding" Value="0"/>
+      <Setter Property="HorizontalContentAlignment" Value="Center"/>
+      <Setter Property="VerticalContentAlignment" Value="Center"/>
+      <Setter Property="FontSize" Value="{DynamicResource bc.type.caption}"/>
+      <Setter Property="FontWeight" Value="SemiBold"/>
+    </Style>
+    <Style Selector="Button.hintToggle:focus-visible">
+      <Setter Property="Padding" Value="0"/>
+    </Style>
+    <!-- Focus landing on the status area (after Skip) is shown with the subtle surface fill
+         (a StackPanel has no border to ring). -->
+    <Style Selector="StackPanel#StatusArea:focus-visible">
+      <Setter Property="Background" Value="{DynamicResource bc.bg.subtle}"/>
+    </Style>
+    <!-- The focused shortcut panel shows the same two-token ring the buttons use. -->
+    <Style Selector="Border.shortcutPanel:focus-visible">
+      <Setter Property="BorderBrush" Value="{DynamicResource bc.focus.outer}"/>
+      <Setter Property="BorderThickness" Value="2"/>
+    </Style>
+    <!-- CONFIG RECOVERY NOTICE. A quiet row, not a banner: secondary text, one hairline above
+         it, no fill, no icon, no error or warning colour (nothing is failing - the link works).
+         The action is a text-style button in the one committed accent, so the row carries a
+         single clear way out without competing with the choice cards. -->
+    <Style Selector="Border.configNotice">
+      <Setter Property="BorderBrush" Value="{DynamicResource bc.border.subtle}"/>
+      <Setter Property="BorderThickness" Value="0,1,0,0"/>
+      <Setter Property="Padding" Value="{DynamicResource bc.pad.3}"/>
+    </Style>
+    <Style Selector="Button.noticeAction">
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="Foreground" Value="{DynamicResource bc.accent.default}"/>
+      <Setter Property="BorderBrush" Value="Transparent"/>
+      <Setter Property="BorderThickness" Value="2"/>
+      <Setter Property="CornerRadius" Value="{DynamicResource bc.radius.control}"/>
+      <Setter Property="MinHeight" Value="28"/>
+      <Setter Property="Padding" Value="6,2"/>
+      <Setter Property="VerticalAlignment" Value="Center"/>
+      <Setter Property="FontSize" Value="{DynamicResource bc.type.caption}"/>
+      <Setter Property="FontWeight" Value="SemiBold"/>
+    </Style>
+    <Style Selector="Button.noticeAction:pointerover /template/ ContentPresenter">
+      <Setter Property="Background" Value="{DynamicResource bc.bg.subtle}"/>
+      <Setter Property="Foreground" Value="{DynamicResource bc.accent.hover}"/>
+    </Style>
+    <!-- Same outer focus token as every other button; padding and fill stay put, so focusing
+         the action never shifts the row (the generic Button:focus-visible rule would). -->
+    <Style Selector="Button.noticeAction:focus-visible">
+      <Setter Property="BorderBrush" Value="{DynamicResource bc.focus.outer}"/>
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="Padding" Value="6,2"/>
+    </Style>
+    <Style Selector="TextBlock.keyCap">
+      <Setter Property="FontWeight" Value="SemiBold"/>
+      <Setter Property="Foreground" Value="{DynamicResource bc.text.primary}"/>
+    </Style>
+  </Window.Styles>
+
+   <!-- Padding consumes the Thickness-typed bc.pad.* family; Spacing consumes the
+        double-typed bc.space.* family. A DynamicResource is handed to the target property
+        unconverted, so the two roles need two token types - see PickerTokens.axaml. -->
+   <Border Padding="{DynamicResource bc.pad.4}">
+     <StackPanel Spacing="{DynamicResource bc.space.3}">
+
+      <!-- D-125 zone 1, calm form: ONE muted line with the link's host (the readable short URL
+           is its tooltip), and the quiet "?" key cap that opens the shortcut list (F1). The long
+           always-on key-hint line is gone; the keys are still listed in that panel. -->
+      <Grid ColumnDefinitions="*,Auto">
+        <TextBlock x:Name="LinkHostLine" Classes="muted" Text="{Binding Link.Host}" FontSize="{DynamicResource bc.type.caption}"
+                   VerticalAlignment="Center" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"
+                   ToolTip.Tip="{Binding Link.ShortUrl}"/>
+        <p:ExpandableToggleButton x:Name="ShortcutsToggleButton" Grid.Column="1" Classes="hintToggle" Content="?" Margin="8,0,0,0"
+                Click="OnShortcutsToggleClick"
+                IsExpanded="{Binding IsDetailsOpen}"
+                ToolTip.Tip="{Binding ShortcutsToggleText}"
+                AutomationProperties.Name="{Binding ShortcutsToggleText}"/>
+      </Grid>
+
+      <!-- FIRST-RUN PANEL. Shown in place of the (empty) card list until the user acts.
+           One committed primary (Find browsers, accent-filled, first in Tab order and the
+           initial focus), two quiet secondaries on one row below it. Primary is first and
+           full width so the most likely choice is also the largest target; Skip is last so
+           a stray Enter on the first frame never declines the scan. -->
+      <Border x:Name="FirstRunPanel" Classes="card" Padding="{DynamicResource bc.pad.5}"
+              IsVisible="{Binding IsFirstRunPromptVisible}"
+              AutomationProperties.Name="{Binding FirstRunTitleText}">
+        <StackPanel Spacing="{DynamicResource bc.space.4}">
+          <StackPanel Spacing="{DynamicResource bc.space.2}">
+            <TextBlock Text="{Binding FirstRunTitleText}" FontSize="{DynamicResource bc.type.subtitle}" FontWeight="SemiBold"
+                       TextWrapping="Wrap"/>
+            <TextBlock x:Name="FirstRunPromptTextBlock" Classes="muted" Text="{Binding FirstRunPromptText}"
+                       FontSize="{DynamicResource bc.type.body}" TextWrapping="Wrap"/>
+          </StackPanel>
+          <Button x:Name="FindBrowsersButton" Classes="primary" Content="{Binding FindBrowsersText}"
+                  Click="OnFindBrowsersClick" TabIndex="0" HorizontalAlignment="Stretch"
+                  AutomationProperties.Name="{Binding FindBrowsersText}"
+                  AutomationProperties.HelpText="{Binding FirstRunPromptText}"/>
+          <!-- UniformGrid with Rows=1 lays out only VISIBLE children: when no file picker is
+               composed, "Add manually" is hidden (it could only fail) and Skip takes the row. -->
+          <UniformGrid Rows="1" ColumnSpacing="8">
+            <Button x:Name="AddManuallyButton" Classes="secondary" Content="{Binding AddManuallyText}"
+                    Click="OnAddManuallyClick" TabIndex="1" HorizontalAlignment="Stretch"
+                    IsVisible="{Binding IsAddManuallyAvailable}"
+                    AutomationProperties.Name="{Binding AddManuallyText}"/>
+            <Button x:Name="SkipButton" Classes="secondary" Content="{Binding SkipText}"
+                    Click="OnSkipClick" TabIndex="2" HorizontalAlignment="Stretch"
+                    AutomationProperties.Name="{Binding SkipText}"/>
+          </UniformGrid>
+          <!-- Always in the tree, text set when the search starts: a live region announces a
+               TEXT change, not a visibility flip. -->
+          <TextBlock x:Name="FirstRunBusyLine" Classes="muted" Text="{Binding FirstRunBusyText}" FontSize="{DynamicResource bc.type.caption}"
+                     AutomationProperties.LiveSetting="Polite"/>
+        </StackPanel>
+      </Border>
+
+      <!-- D-125 zone 2: one choice card per detected candidate.
+           SCROLLS ONLY WHEN THE SCREEN IS TOO SHORT. With no MaxHeight (the default) the viewer
+           measures to its content and the window is exactly as tall as before. When the measured
+           window would exceed the work area of the monitor it opens on (nine cards at 125-150 %
+           on 1080p - visual audit), code-behind caps THIS viewer's MaxHeight, never the window's
+           Height, so the window's measurement and its own layout stay identical and the
+           live height re-pin cannot loop. A focused card is scrolled into view. -->
+      <ScrollViewer x:Name="CardsScroller"
+                    HorizontalScrollBarVisibility="Disabled"
+                    VerticalScrollBarVisibility="Auto">
+      <!-- Tiles left to right, centred; at most 8 per row (fewer on a narrow work area - the
+           window width is set from the tile count in code-behind, WidthForTileCount). Each row,
+           the last one included, is centred (ItemsAlignment), so a lone ninth tile sits under the
+           middle of the row above, matching the centred window. -->
+      <ItemsControl x:Name="CardsItems" ItemsSource="{Binding Cards}">
+        <ItemsControl.ItemsPanel>
+          <ItemsPanelTemplate>
+            <!-- Balanced rows (9 -> 5+4, never 8+1), each centred in the FULL panel width, so the
+                 group's centre is the window's centre even above the 360 DIP floor. MaxPerRow is
+                 set from the work area in code-behind (ApplyTilesPerRow). -->
+            <p:BalancedRowsPanel HorizontalAlignment="Stretch"/>
+          </ItemsPanelTemplate>
+        </ItemsControl.ItemsPanel>
+        <ItemsControl.ItemTemplate>
+          <DataTemplate>
+             <Button Classes="choiceCard" MinWidth="44" MinHeight="44" Click="OnChoiceCardClick" GotFocus="OnChoiceCardGotFocus" AutomationProperties.Name="{Binding AccessibleName}" AutomationProperties.HelpText="{Binding KeyHelpText}" ToolTip.Tip="{Binding TooltipText}">
+              <StackPanel Spacing="{DynamicResource bc.space.3}">
+                <!-- The letter plate shows until the program icon arrives (BrowserIconLoader), and
+                     stays for good when the icon cannot be read. Same 48 DIP box either way, so
+                     the swap never moves the tile. -->
+                <Panel Width="{DynamicResource bc.tile.icon}" Height="{DynamicResource bc.tile.icon}" HorizontalAlignment="Center"
+                       AutomationProperties.AccessibilityView="Raw">
+                  <Border Classes="iconPlate" IsVisible="{Binding !HasIcon}">
+                    <TextBlock Text="{Binding Initial}"/>
+                  </Border>
+                  <Image x:Name="TileIcon" Source="{Binding Icon}" IsVisible="{Binding HasIcon}" Stretch="Uniform"
+                         Width="{DynamicResource bc.tile.icon}" Height="{DynamicResource bc.tile.icon}"
+                         RenderOptions.BitmapInterpolationMode="HighQuality"/>
+                </Panel>
+                <!-- Name (up to two lines), then (only for a browser with several profiles) the
+                     launched profile on one muted line. -->
+                <StackPanel>
+                  <TextBlock Classes="tileName" Text="{Binding DisplayName}"
+                             MaxWidth="{DynamicResource bc.tile.labelWidth}"/>
+                  <!-- Profile line: the name trims, the "+N" count (docked right) never does. NoWrap,
+                       not Wrap + MaxLines=1: a wrapped label is arranged at the width of its first
+                       wrapped line (40 DIP for "Work - Design team") and then re-trimmed there; a
+                       single line trims once, against the full 70 DIP inner width. -->
+                  <DockPanel x:Name="TileProfileLine" IsVisible="{Binding HasProfile}" HorizontalAlignment="Center"
+                             MaxWidth="{DynamicResource bc.tile.labelWidth}">
+                    <TextBlock x:Name="TileProfileMore" DockPanel.Dock="Right" Classes="tileName muted" Text="{Binding HiddenProfileCountText}"
+                               IsVisible="{Binding HasHiddenProfiles}" TextWrapping="NoWrap" TextTrimming="None" Margin="3,0,0,0"/>
+                    <TextBlock x:Name="TileProfile" Classes="tileName muted" Text="{Binding ProfileName}" MaxLines="1" TextWrapping="NoWrap"/>
+                  </DockPanel>
+                </StackPanel>
+              </StackPanel>
+            </Button>
+          </DataTemplate>
+        </ItemsControl.ItemTemplate>
+      </ItemsControl>
+      </ScrollViewer>
+
+      <!-- D-125 zone 3: bottom bar (status line, then the permanent hints). -->
+       <!-- Focusable only as a landing spot when the control that held focus disappears (the
+            first-run panel after Skip): focus moves here, the screen reader reads the status, and
+            Tab continues from the bottom bar. It is kept out of the normal Tab order in
+            code-behind (PickerWindow constructor), not here: the accessibility suite forbids a
+            tab-stop opt-out on any interactive picker control in XAML, and this panel is not one. -->
+       <StackPanel x:Name="StatusArea" AutomationProperties.LiveSetting="Polite" Spacing="{DynamicResource bc.space.1}"
+                   Focusable="False"
+                   AutomationProperties.AccessibilityView="Control"
+                   AutomationProperties.ControlTypeOverride="Group"
+                   AutomationProperties.Name="{Binding StatusMessage}">
+        <TextBlock Text="{Binding StatusMessage}" IsVisible="{Binding IsErrorStatusVisible}"
+                    Foreground="{DynamicResource bc.status.danger.onSurface}" FontSize="{DynamicResource bc.type.caption}" TextWrapping="Wrap"/>
+        <TextBlock Text="{Binding StatusMessage}" IsVisible="{Binding IsInfoStatusVisible}"
+                    Foreground="{DynamicResource bc.accent.default}" FontSize="{DynamicResource bc.type.caption}" TextWrapping="Wrap"/>
+      </StackPanel>
+
+      <!-- CONFIG RECOVERY NOTICE (history.json / rules.json was unreadable; defaults in use).
+           Its own row BELOW the status line, so a launch error keeps its place next to the
+           cards and the notice is never overwritten by it. Present from the first frame and
+           for the whole run; it takes no focus at open (focus stays on card 1) and is reached
+           with Tab after the cards. Not a live region: it does not change after open. -->
+      <!-- ANNOUNCED ONCE: the row is a polite live region whose NAME is empty in the first
+           frame and set to the sentence after open (PickerSession.OnWindowOpened), so a screen
+           reader reads it once without stealing focus. The sentence TextBlock is hidden from
+           the automation tree (the row's name already carries it) and the button has no help
+           text, so the sentence is never read twice. -->
+      <Border x:Name="ConfigNotice" Classes="configNotice"
+              IsVisible="{Binding IsConfigNoticeVisible}"
+              AutomationProperties.LiveSetting="Polite"
+              AutomationProperties.AccessibilityView="Control"
+              AutomationProperties.ControlTypeOverride="Group"
+              AutomationProperties.Name="{Binding ConfigNoticeAnnouncement}">
+        <Grid ColumnDefinitions="*,Auto">
+          <TextBlock x:Name="ConfigNoticeTextBlock" Classes="muted" Text="{Binding ConfigNoticeText}"
+                     AutomationProperties.AccessibilityView="Raw"
+                     FontSize="{DynamicResource bc.type.caption}" TextWrapping="Wrap" VerticalAlignment="Center"/>
+          <!-- Two presses, like Ctrl+Backspace: the label changes to the confirm wording when
+               armed and to "Repairing..." while the hidden recovery run is in flight, when the
+               button is disabled so a double click cannot start a second run. -->
+          <Button x:Name="RepairSettingsButton" Grid.Column="1" Classes="noticeAction" Margin="8,0,0,0"
+                  Content="{Binding RepairButtonText}"
+                  IsEnabled="{Binding !IsRepairRunning}"
+                  Click="OnRepairSettingsClick"
+                  AutomationProperties.Name="{Binding RepairButtonText}"/>
+        </Grid>
+      </Border>
+
+      <!-- SHORTCUT HINTS. The bottom line shows only the three keys every run needs plus the
+           way to see the rest (F1 / "?"). The full list opens as an aligned two-column panel
+           ABOVE the line - the "details layer" Esc closes first - so no translation ever has to
+           fit 460 DIP on one line. The compact line itself trims rather than wraps. -->
+      <!-- ACCESSIBLE BY FOCUS: opening the list moves keyboard focus onto the panel itself
+           (Focusable, with the whole list as its help text), so a screen reader reads it as soon
+           as it appears; closing it returns focus to where it was. The toggle button exposes
+           expanded/collapsed (ShortcutsToggleButton, code-behind peer). -->
+      <Border x:Name="ShortcutPanel" Classes="card shortcutPanel" Padding="{DynamicResource bc.pad.4}"
+              IsVisible="{Binding IsDetailsOpen}" Focusable="True"
+              AutomationProperties.AccessibilityView="Control"
+              AutomationProperties.ControlTypeOverride="Group"
+              AutomationProperties.Name="{Binding ShortcutsToggleText}"
+              AutomationProperties.HelpText="{Binding ShortcutListAccessibleText}">
+        <ItemsControl ItemsSource="{Binding ShortcutRows}">
+          <ItemsControl.ItemsPanel>
+            <ItemsPanelTemplate>
+              <StackPanel Spacing="{DynamicResource bc.space.2}"/>
+            </ItemsPanelTemplate>
+          </ItemsControl.ItemsPanel>
+          <ItemsControl.ItemTemplate>
+            <DataTemplate>
+              <Grid ColumnDefinitions="128,*">
+                <TextBlock Classes="keyCap" Text="{Binding Keys}" FontSize="{DynamicResource bc.type.caption}" TextWrapping="Wrap"/>
+                <TextBlock Grid.Column="1" Classes="muted" Text="{Binding Action}" FontSize="{DynamicResource bc.type.caption}" TextWrapping="Wrap"/>
+              </Grid>
+            </DataTemplate>
+          </ItemsControl.ItemTemplate>
+        </ItemsControl>
+      </Border>
+
+
+    </StackPanel>
+  </Border>
+</Window>

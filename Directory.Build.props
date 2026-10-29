@@ -1,0 +1,31 @@
+<Project>
+  <PropertyGroup>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <AnalysisLevel>latest-recommended</AnalysisLevel>
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+    <Platforms>x64</Platforms>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <NeutralLanguage>en</NeutralLanguage>
+    <ContinuousIntegrationBuild Condition="'$(CI)' == 'true'">true</ContinuousIntegrationBuild>
+    <Deterministic>true</Deterministic>
+    <NuGetAudit>true</NuGetAudit>
+    <NuGetAuditMode>all</NuGetAuditMode>
+    <NuGetAuditLevel>low</NuGetAuditLevel>
+    <!-- Product identity in every exe's version resource. Must equal AppName / AppPublisher in
+         packaging/BroChoos.Installer/BroChoos.per-user.iss (ReleasePipelineTests pins this). -->
+    <Product>BroChoos Picker</Product>
+    <Company>BroChoos</Company>
+    <!-- Release publish switch. The App and all four helper exes read it as their SelfContained
+         value. It is a CUSTOM global property on purpose: MSBuild strips SelfContained itself from
+         ProjectReference builds, so `dotnet publish -self-contained` alone would leave the helpers
+         framework-dependent and they would fail to start on a machine without a .NET runtime.
+         A custom property flows to the helper references. Default false keeps dev/test builds as
+         they were. -->
+    <BroChoosSelfContained Condition="'$(BroChoosSelfContained)' == ''">false</BroChoosSelfContained>
+  </PropertyGroup>
+</Project>

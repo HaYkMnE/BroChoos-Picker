@@ -1,0 +1,33 @@
+<ResourceDictionary xmlns="https://github.com/avaloniaui"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:sys="clr-namespace:System;assembly=System.Runtime">
+  <!-- W5.4: Russian localization resources. Must maintain key parity with Strings.en.axaml -->
+  
+  <!-- Picker Window -->
+  <sys:String x:Key="picker.select.hints">1-9 выбор  ·  Tab/стрелки навигация  ·  Enter открыть  ·  Ctrl+C копировать  ·  Esc отмена</sys:String>
+  
+  <!-- Ghost Toast (3s, non-interactive) -->
+  <sys:String x:Key="GhostToast.Opened">Открыто</sys:String>
+  
+  <!-- Cleanup Recovery Toast (8s, interactive) -->
+  <sys:String x:Key="CleanupToast.Title">Восстановление очистки</sys:String>
+  <sys:String x:Key="CleanupToast.RestoreButton">Восстановить</sys:String>
+  
+  <!-- Picker ViewModel Status Messages -->
+  <sys:String x:Key="Status.LaunchFailure">Не удалось открыть {0} ({1}). Попробуйте другую карточку, F для системы, Ctrl+C для копирования, Esc для отмены.</sys:String>
+  <sys:String x:Key="Status.Copied">URL скопирован в буфер обмена.</sys:String>
+  <sys:String x:Key="Status.CopyFailed">Копирование не удалось. URL всё ещё виден в карточке ссылки выше.</sys:String>
+
+  <!-- W7.2 словарь причин упорядочивания: каждый нестандартный порядок имеет видимую причину, слово «Рекомендуется» запрещено. -->
+  <sys:String x:Key="Suggestion.Reason.MatchedRule">Предложено правилом: {0}</sys:String>
+  <sys:String x:Key="Suggestion.Reason.MatchedRuleGeneric">Предложено совпавшим правилом</sys:String>
+  <sys:String x:Key="Suggestion.Reason.RecentSession">Недавний выбор в этом сеансе</sys:String>
+  <sys:String x:Key="Suggestion.Reason.ProbableSource">Вероятно, открыто из исходного приложения</sys:String>
+  <sys:String x:Key="Suggestion.Reason.AllChoices">Все варианты</sys:String>
+  
+  <!-- First Run Prompt -->
+  <sys:String x:Key="FirstRun.Prompt">BroChoos ещё не искал браузеры на этом компьютере. «Найти браузеры» запустит поиск сейчас, а можно пропустить и решить позже.</sys:String>
+  <sys:String x:Key="FirstRun.FindBrowsers">Найти браузеры</sys:String>
+  <sys:String x:Key="FirstRun.AddManually">Добавить вручную</sys:String>
+  <sys:String x:Key="FirstRun.Skip">Пропустить</sys:String>
+</ResourceDictionary>

@@ -1,0 +1,52 @@
+root = true
+
+# Line endings are declared PER EXTENSION so this file agrees with .gitattributes.
+# A blanket end_of_line here contradicted the checked-in eol attributes, which made
+# `dotnet format --verify-no-changes` fight the working tree git itself produced.
+[*]
+charset = utf-8
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = tab
+indent_size = 4
+
+[*.{cs,csx}]
+end_of_line = crlf
+indent_style = tab
+indent_size = 4
+csharp_new_line_before_open_brace = all
+csharp_new_line_before_else = true
+csharp_new_line_before_catch = true
+csharp_new_line_before_finally = true
+csharp_using_directive_placement = outside_namespace:warning
+csharp_style_namespace_declarations = file_scoped:warning
+dotnet_style_qualification_for_field = false:suggestion
+dotnet_style_qualification_for_property = false:suggestion
+dotnet_style_qualification_for_method = false:suggestion
+dotnet_style_qualification_for_event = false:suggestion
+dotnet_analyzer_diagnostic.category-Style.severity = warning
+dotnet_analyzer_diagnostic.category-Performance.severity = warning
+dotnet_analyzer_diagnostic.category-Security.severity = error
+
+# CA1848 targets high-frequency logging hot paths; this CLI logs a few lines per run,
+# so LoggerMessage.Define delegates would add code without any measurable gain here.
+dotnet_diagnostic.CA1848.severity = suggestion
+
+# The local problem log writes the message TEMPLATE as the event (ProblemLog.cs), so a
+# non-constant template (an interpolated string) would put runtime values into it.
+[src/**.cs]
+dotnet_diagnostic.CA2254.severity = error
+
+[*.{sln,ps1}]
+end_of_line = crlf
+
+[*.{json,yml,yaml,xml,axaml,csproj,props,targets}]
+end_of_line = lf
+indent_style = space
+indent_size = 2
+
+[*.md]
+end_of_line = lf
+indent_style = space
+indent_size = 2
+trim_trailing_whitespace = false

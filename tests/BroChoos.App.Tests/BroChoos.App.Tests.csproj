@@ -1,0 +1,50 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <!-- Must match BroChoos.App's TFM/TPV (it is the exe host) for project-reference compatibility. -->
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\BroChoos.App\BroChoos.App.csproj" />
+    <ProjectReference Include="..\..\src\BroChoos.Core\BroChoos.Core.csproj" />
+    <!-- Explicit, matching the style above: the 0A-5 scaffold tests name AtomicWriteStage /
+         IAtomicWriteObserver directly, so the assembly that declares them is referenced here
+         rather than relied on transitively through BroChoos.App. -->
+    <ProjectReference Include="..\..\src\BroChoos.Platform.Windows\BroChoos.Platform.Windows.csproj" />
+  </ItemGroup>
+
+  <!-- ONE test-side copy of the single-instance mutex probe, shared by LINK with
+       BroChoos.Platform.Windows.Tests, so the two test projects cannot drift apart. The guard's
+       own mutex name is private and this assembly has no InternalsVisibleTo grant, so the
+       product value is not reachable from here without a product change. -->
+  <ItemGroup>
+    <Compile Include="..\BroChoos.Platform.Windows.Tests\SingleInstance\SharedGuardMutex.cs" Link="SingleInstance\SharedGuardMutex.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" PrivateAssets="all" />
+    <PackageReference Include="Xunit.SkippableFact" PrivateAssets="all" />
+    <PackageReference Include="FluentAssertions" />
+    <PackageReference Include="coverlet.collector" PrivateAssets="all" />
+  </ItemGroup>
+
+  <!-- THE SCAFFOLD TESTS FOLLOW THE SCAFFOLD OUT OF EVERY NON-DEBUG BUILD, and they have to:
+       the types they exercise (BroChoos.App.Scaffold0A5) are removed from compilation in those
+       configurations by the matching ItemGroup in BroChoos.App.csproj, so in Release the whole
+       namespace ceases to exist and these files could not compile at all.
+
+       MIRRORS THE APP PROJECT'S MECHANISM DELIBERATELY. Doing it here rather than with #if
+       DEBUG inside each test file keeps the preprocessor out of the test sources, and it means
+       the app's gate and its tests' gate are the same construct with the same condition - one
+       thing to understand instead of two, and it cannot drift out of step.
+
+       NOTHING GOES UNVERIFIED BY THIS. The scaffold exists only in Debug, so Debug is the only
+       configuration in which there is anything to test - and it is also the configuration the
+       D-v3.5-493 harness (tools\atomic-kill-test.ps1) builds and runs. -->
+  <ItemGroup Condition="'$(Configuration)' != 'Debug'">
+    <Compile Remove="Scaffold0A5\**\*.cs" />
+  </ItemGroup>
+</Project>

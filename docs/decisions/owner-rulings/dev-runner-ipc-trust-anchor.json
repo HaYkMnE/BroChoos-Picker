@@ -1,0 +1,31 @@
+﻿{
+    "schemaVersion":  "1.0.0",
+    "recordVersion":  "1.0.0",
+    "subjectId":  "DEV-RUNNER-IPC-TRUST-ANCHOR",
+    "resolutionState":  {
+                            "disposition":  "approved",
+                            "priorStatus":  "OPEN"
+                        },
+    "scope":  "local Dev Runner IPC only",
+    "signerIdentityModel":  "x509-chain",
+    "authority":  {
+                      "source":  "DH-2026-09-11",
+                      "approver":  "owner@brochoos",
+                      "approvedAtUtc":  "2026-09-12T00:00:00Z"
+                  },
+    "validation":  {
+                       "status":  "PASS",
+                       "reviewedBy":  "security-review@brochoos",
+                       "reviewedAtUtc":  "2026-09-12T00:00:00Z"
+                   },
+    "publicTrustMetadata":  {
+                                "testOnly":  false
+                            },
+    "trustAnchorLifecycle":  {
+                                 "provisioning":  "manual owner-controlled provisioning",
+                                 "storage":  "local machine trust store reference only",
+                                 "rotation":  "owner-authorized rotation with overlap window",
+                                 "revocation":  "explicit revocation list and deny on mismatch",
+                                 "constraints":  "no fixture fallback; local Dev Runner IPC only"
+                             }
+}

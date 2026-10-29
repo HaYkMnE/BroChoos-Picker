@@ -1,0 +1,35 @@
+{
+  "schemaVersion": "1.0.0",
+  "recordVersion": "1.1.0",
+  "subjectId": "INSTALLER-TOOLCHAIN-APPROVAL",
+  "resolutionState": {
+    "disposition": "approved",
+    "priorStatus": "OPEN"
+  },
+  "toolchain": {
+    "product": "Inno Setup",
+    "version": "6.7.2"
+  },
+  "distribution": {
+    "sourceIdentity": "Inno Setup 6.7.2 installed per-user at %LOCALAPPDATA%\\Programs\\Inno Setup 6\\ (HKCU uninstall entry DisplayVersion=6.7.2); compiler ISCC.exe Authenticode-signed by CN=Pyrsys B.V. (Valid)",
+    "integrityReference": "sha256:bb8d5f6cfaddc1446d1db2b900b056b8393faaeaf987bdfe25a2905702d2c9c6 (artifact=installed ISCC.exe, not the setup exe); signer thumbprint E0AB19C8D38CBF9C44709925122A7A02F8C70CB7"
+  },
+  "scope": "per-user packaging for this phase",
+  "constraints": "Use only per-user packaging; no machine-wide installer behavior is authorized by this record.",
+  "authority": {
+    "source": "Maintainer decision on 2026-10-27: approve Inno Setup 6.7.2, replacing the 6.4.3 pin",
+    "approver": "maintainers@brochoos",
+    "approvedAtUtc": "2026-10-27T00:00:00Z"
+  },
+  "validation": {
+    "status": "PASS",
+    "reviewedBy": "release-engineering@brochoos",
+    "reviewedAtUtc": "2026-10-27T00:00:00Z"
+  },
+  "notes": [
+    "Revision 1.1.0 (2026-10-27) supersedes recordVersion 1.0.0, which pinned Inno Setup 6.4.3 (GitHub release jrsoftware/issrc tag is-6_4_3, innosetup-6.4.3.exe, sha256:f3c42116542c4cc57263c5ba6c4feabfc49fe771f2f98a79d2f7628b8762723b).",
+    "Setup-file pin used by CI and release: https://github.com/jrsoftware/issrc/releases/download/is-6_7_2/innosetup-6.7.2.exe (immutable GitHub release is-6_7_2, 10618616 bytes), sha256:9f27f8386e554eb093336a1ca5c2dcacb7dbf04ab020889491d7ac53c38a12ff, equal to the GitHub API asset digest; Authenticode Valid, signer CN=Pyrsys B.V., thumbprint E0AB19C8D38CBF9C44709925122A7A02F8C70CB7. .github/workflows/ci.yml (powershell-tests) verifies both before installing.",
+    "Time-of-day in approvedAtUtc/reviewedAtUtc is not recorded; 00:00:00Z marks the decision date only.",
+    "The version is pinned to a single immutable token so packaging decisions are deterministic."
+  ]
+}

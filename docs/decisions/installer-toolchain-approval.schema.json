@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://brochoos.local/schemas/installer-toolchain-approval.schema.json",
+  "title": "BroChoos Installer Toolchain Approval",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "recordVersion",
+    "subjectId",
+    "resolutionState",
+    "toolchain",
+    "distribution",
+    "scope",
+    "constraints",
+    "authority",
+    "validation"
+  ],
+  "properties": {
+    "schemaVersion": { "type": "string", "minLength": 1 },
+    "recordVersion": { "type": "string", "minLength": 1 },
+    "subjectId": { "type": "string", "pattern": "^[A-Z0-9._-]+$" },
+    "resolutionState": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["disposition", "priorStatus"],
+      "properties": {
+        "disposition": { "type": "string", "enum": ["approved", "rejected", "deferred"] },
+        "priorStatus": { "type": "string", "minLength": 1 }
+      }
+    },
+    "toolchain": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["product", "version"],
+      "properties": {
+        "product": { "type": "string", "minLength": 1 },
+        "version": { "type": "string", "minLength": 1 }
+      }
+    },
+    "distribution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sourceIdentity", "integrityReference"],
+      "properties": {
+        "sourceIdentity": { "type": "string", "minLength": 1 },
+        "integrityReference": { "type": "string", "minLength": 1 }
+      }
+    },
+    "scope": { "const": "per-user packaging for this phase" },
+    "constraints": { "type": "string", "minLength": 1 },
+    "authority": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source", "approver", "approvedAtUtc"],
+      "properties": {
+        "source": { "type": "string", "minLength": 1 },
+        "approver": { "type": "string", "minLength": 1 },
+        "approvedAtUtc": { "type": "string", "format": "date-time" }
+      }
+    },
+    "validation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "reviewedBy", "reviewedAtUtc"],
+      "properties": {
+        "status": { "type": "string", "enum": ["PASS", "FAIL", "PENDING"] },
+        "reviewedBy": { "type": "string", "minLength": 1 },
+        "reviewedAtUtc": { "type": "string", "format": "date-time" }
+      }
+    },
+    "notes": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  }
+}

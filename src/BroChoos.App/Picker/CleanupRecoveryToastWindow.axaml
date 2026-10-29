@@ -1,0 +1,27 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="BroChoos.App.Picker.CleanupRecoveryToastWindow"
+        Width="340"
+        Height="80"
+        CanResize="False"
+        ShowInTaskbar="False"
+        Topmost="True"
+        Focusable="True"
+        IsHitTestVisible="True"
+        Background="{DynamicResource bc.bg.card}"
+        SystemDecorations="None">
+  <Border Padding="12"
+          CornerRadius="8"
+          BorderBrush="{DynamicResource bc.border.strong}"
+          BorderThickness="1">
+    <StackPanel Spacing="8">
+      <TextBlock Text="{DynamicResource CleanupToast.Title}"
+                 FontSize="{DynamicResource bc.type.caption}"
+                 Foreground="{DynamicResource bc.text.primary}"/>
+      <Button Content="{DynamicResource CleanupToast.RestoreButton}"
+              AutomationProperties.Name="{DynamicResource CleanupToast.RestoreButton}"
+              MinWidth="44"
+              MinHeight="44"/>
+    </StackPanel>
+  </Border>
+</Window>

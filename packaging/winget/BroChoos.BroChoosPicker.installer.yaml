@@ -1,0 +1,41 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.12.0.schema.json
+# Template. tools/update-winget-manifest.ps1 fills the double-underscore placeholders for one release.
+# The inno installer is per-user (PrivilegesRequired=lowest), so Scope is user. ProductCode is the
+# Inno uninstall key {AppId}_is1 from packaging/BroChoos.Installer/BroChoos.per-user.iss.
+PackageIdentifier: BroChoos.BroChoosPicker
+PackageVersion: __VERSION__
+MinimumOSVersion: 10.0.19041.0
+Protocols:
+  - http
+  - https
+FileExtensions:
+  - url
+Installers:
+  - Architecture: x64
+    InstallerType: inno
+    Scope: user
+    InstallerUrl: __INSTALLER_URL__
+    InstallerSha256: __INSTALLER_SHA256__
+    UpgradeBehavior: install
+    ProductCode: '{D4D2C59D-B9D0-44D8-A44D-2AE5D749F9C5}_is1'
+    AppsAndFeaturesEntries:
+      - DisplayName: BroChoos Picker
+        Publisher: BroChoos
+        ProductCode: '{D4D2C59D-B9D0-44D8-A44D-2AE5D749F9C5}_is1'
+  - Architecture: x64
+    InstallerType: zip
+    NestedInstallerType: portable
+    # ArchiveBinariesDependOnPath: winget puts the install folder itself on PATH instead of a
+    # WinGet\Links symlink. BroChoos.exe finds .portable and its helper exes next to
+    # Environment.ProcessPath, which a symlink would point at the Links folder.
+    # No PortableCommandAlias, on purpose: winget compares the alias with the file name
+    # case-sensitively, so "brochoos" vs "BroChoos.exe" would make it create a hardlink at
+    # brochoos.exe, which on a case-insensitive disk is BroChoos.exe itself (PortableFlow.cpp /
+    # PortableInstaller.cpp, winget-cli). With the folder on PATH, "BroChoos" already resolves.
+    ArchiveBinariesDependOnPath: true
+    NestedInstallerFiles:
+      - RelativeFilePath: BroChoos.exe
+    InstallerUrl: __PORTABLE_URL__
+    InstallerSha256: __PORTABLE_SHA256__
+ManifestType: installer
+ManifestVersion: 1.12.0

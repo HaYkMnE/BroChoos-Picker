@@ -1,0 +1,200 @@
+<ResourceDictionary xmlns="https://github.com/avaloniaui"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:p="clr-namespace:BroChoos.App.Picker">
+  <!-- W5.1: Art Virtuoso visual packet 01 tokens. Values are logical px.
+
+       DECLARED TYPES ARE THE CONSUMER CONTRACT, NOT A FORMATTING CHOICE.
+       A DynamicResource hands its value to the target property UNCONVERTED: the value's
+       runtime type must already BE the property's type, or the property store throws
+       InvalidCastException while the control is being populated. So every token below is
+       declared in the type its consumers actually need:
+         FontFamily  -> FontFamily        (Window.FontFamily)
+         CornerRadius-> CornerRadius      (Border/Button.CornerRadius)
+         Thickness   -> Thickness         (Border.Padding)
+         x:Double    -> double            (FontSize, Spacing, Width/Height)
+       The earlier file declared bc.font.ui as x:String, bc.radius.* as x:Double and the
+       padding tokens as x:Double, and all four consumers threw at load. -->
+
+  <!-- WINDOW TYPEFACE: a FontFamily, because that is what FontFamily="{DynamicResource ...}" demands. -->
+  <FontFamily x:Key="bc.font.ui">Segoe UI Variable Text,Segoe UI,Noto Sans,Noto Sans Armenian,Sylfaen,sans-serif</FontFamily>
+
+  <!-- TYPE SCALE (FontSize consumers) stays x:Double. -->
+  <x:Double x:Key="bc.type.caption">12</x:Double>
+  <x:Double x:Key="bc.type.body">14</x:Double>
+  <x:Double x:Key="bc.type.bodyStrong">14</x:Double>
+  <x:Double x:Key="bc.type.subtitle">15</x:Double>
+  <x:Double x:Key="bc.type.title">20</x:Double>
+  <x:Double x:Key="bc.type.caption.lineHeight">16</x:Double>
+  <x:Double x:Key="bc.type.body.lineHeight">20</x:Double>
+  <x:Double x:Key="bc.type.subtitle.lineHeight">22</x:Double>
+  <x:Double x:Key="bc.type.title.lineHeight">28</x:Double>
+
+  <!-- SPACE SCALE (Spacing / Width / Height consumers) stays x:Double: StackPanel.Spacing is a
+       double and cannot take a Thickness. -->
+  <x:Double x:Key="bc.space.0">0</x:Double><x:Double x:Key="bc.space.1">2</x:Double>
+  <x:Double x:Key="bc.space.2">4</x:Double><x:Double x:Key="bc.space.3">8</x:Double>
+  <x:Double x:Key="bc.space.4">12</x:Double><x:Double x:Key="bc.space.5">16</x:Double>
+  <x:Double x:Key="bc.space.6">24</x:Double><x:Double x:Key="bc.space.7">32</x:Double>
+  <x:Double x:Key="bc.space.8">48</x:Double>
+
+  <!-- PAD SCALE: the SAME numeric steps, expressed as Thickness for Border.Padding. This family
+       exists because one numeric token cannot serve both consumer types without a converter, and
+       Avalonia applies no converter to a DynamicResource. Padding is an inset, Spacing is a gap,
+       so the two families are named for the role rather than collapsed into one that would have
+       to lie about its type. bc.pad.N mirrors bc.space.N exactly; keep them in step. -->
+  <Thickness x:Key="bc.pad.0">0</Thickness><Thickness x:Key="bc.pad.1">2</Thickness>
+  <Thickness x:Key="bc.pad.2">4</Thickness><Thickness x:Key="bc.pad.3">8</Thickness>
+  <Thickness x:Key="bc.pad.4">12</Thickness><Thickness x:Key="bc.pad.5">16</Thickness>
+  <Thickness x:Key="bc.pad.6">24</Thickness><Thickness x:Key="bc.pad.7">32</Thickness>
+  <Thickness x:Key="bc.pad.8">48</Thickness>
+
+  <x:Double x:Key="bc.target.min">44</x:Double><x:Double x:Key="bc.target.cardRow">48</x:Double>
+
+  <!-- PICKER TILE (docs/design/PICKER-LAYOUT-SPEC.md). Height = 2 x (8 pad + 1 border) + 48 icon
+       + 8 gap + two 16 DIP name lines = 106; with a profile line (any tile in the window) + 16 = 122.
+       One tile slot = width + 2 x 4 margin = 96. -->
+  <x:Double x:Key="bc.tile.width">88</x:Double>
+  <x:Double x:Key="bc.tile.height">106</x:Double>
+  <x:Double x:Key="bc.tile.heightWithProfile">122</x:Double>
+  <x:Double x:Key="bc.tile.icon">48</x:Double>
+  <x:Double x:Key="bc.tile.labelWidth">70</x:Double>
+  <Thickness x:Key="bc.tile.margin">4</Thickness>
+
+  <!-- RADIUS SCALE is CornerRadius, not x:Double: every consumer is a CornerRadius property. -->
+  <CornerRadius x:Key="bc.radius.none">0</CornerRadius>
+  <CornerRadius x:Key="bc.radius.control">4</CornerRadius>
+  <CornerRadius x:Key="bc.radius.card">8</CornerRadius>
+  <CornerRadius x:Key="bc.radius.window">8</CornerRadius>
+
+  <x:String x:Key="bc.elevation.card">0 1 4 0 #14000000</x:String>
+  <x:String x:Key="bc.elevation.flyout">0 8 32 0 #24000000</x:String>
+  <x:String x:Key="bc.elevation.dialog">0 16 64 0 #38000000</x:String>
+  <x:String x:Key="bc.material.solid">opaque</x:String><x:String x:Key="bc.material.blur">opt-in</x:String>
+  <x:Boolean x:Key="bc.material.transparency.enabled">False</x:Boolean>
+  <x:Double x:Key="bc.motion.reduced">0</x:Double>
+  <x:Double x:Key="bc.dwell.ghost">3000</x:Double><x:Double x:Key="bc.dwell.recovery">8000</x:Double>
+
+  <!-- KEYS DELIBERATELY ABSENT HERE: bc.motion.fast / .normal / .slow,
+       bc.motion.transitions.enabled and bc.os.reducedMotion.
+
+       THEY ARE RUNTIME-OWNED, AND A DECLARATION HERE WOULD SHADOW THE RUNTIME VALUE.
+       PickerApp.ApplyPlatformAccessibility writes all five into Application.Resources from
+       the live OS settings (animations on/off) and re-writes them whenever the platform
+       colours change. This file is merged into Window.Resources, and a window-level
+       dictionary is searched BEFORE the application dictionary, so a declaration here wins
+       and the OS setting is silently ignored - MEASURED: with reduced motion ON, a
+       DynamicResource consumer of bc.motion.fast still resolved 90 (the value this file used
+       to declare) instead of the 0 the application had written.
+
+       The values this file used to carry were the "animations enabled" defaults, so the
+       defect was invisible on a default desktop and only appeared for the users the setting
+       exists for. Declaring nothing is what makes the runtime value reachable; the defaults
+       live in PickerApp beside the OS read that produces them, so there is exactly one
+       source for each of these five keys. -->
+
+
+  <ResourceDictionary.ThemeDictionaries>
+    <ResourceDictionary x:Key="Light">
+      <Color x:Key="bc.bg.base">#FFFFFF</Color><Color x:Key="bc.bg.card">#F7F7F7</Color><Color x:Key="bc.bg.subtle">#EBEBEB</Color>
+      <Color x:Key="bc.text.primary">#1B1B1B</Color><Color x:Key="bc.text.secondary">#4A4A4A</Color><Color x:Key="bc.text.disabled">#8C8C8C</Color>
+      <Color x:Key="bc.accent.default">#0F6CBD</Color><Color x:Key="bc.accent.hover">#115EA3</Color><Color x:Key="bc.accent.pressed">#0C3B5E</Color><Color x:Key="bc.accent.onAccent">#FFFFFF</Color>
+      <Color x:Key="bc.border.subtle">#E0E0E0</Color><Color x:Key="bc.border.strong">#8A8A8A</Color>
+      <Color x:Key="bc.status.success">#107C10</Color><Color x:Key="bc.status.success.onSurface">#0E6B0E</Color><Color x:Key="bc.status.warning">#9D4D00</Color><Color x:Key="bc.status.warning.onSurface">#8A4300</Color><Color x:Key="bc.status.danger">#C42B1C</Color><Color x:Key="bc.status.danger.onSurface">#B22416</Color>
+      <Color x:Key="bc.scrim">#52000000</Color><Color x:Key="bc.focus.outer">#1B1B1B</Color><Color x:Key="bc.focus.inner">#FFFFFF</Color>
+      <!-- Outer half of the primary button's two-tone focus ring: a 2 DIP solid spread in the
+           bc.focus.outer colour (a BoxShadows value cannot reference a Color resource, so the
+           colour is restated here; a test pins the two equal per theme). -->
+      <BoxShadows x:Key="bc.focus.ring.primary">0 0 0 2 #1B1B1B</BoxShadows>
+    </ResourceDictionary>
+    <ResourceDictionary x:Key="Dark">
+      <Color x:Key="bc.bg.base">#202020</Color><Color x:Key="bc.bg.card">#2B2B2B</Color><Color x:Key="bc.bg.subtle">#363636</Color>
+      <Color x:Key="bc.text.primary">#FFFFFF</Color><Color x:Key="bc.text.secondary">#C8C8C8</Color><Color x:Key="bc.text.disabled">#6E6E6E</Color>
+      <Color x:Key="bc.accent.default">#77B7F0</Color><Color x:Key="bc.accent.hover">#93C7F5</Color><Color x:Key="bc.accent.pressed">#4F97D9</Color><Color x:Key="bc.accent.onAccent">#0F1A24</Color>
+      <Color x:Key="bc.border.subtle">#3D3D3D</Color><Color x:Key="bc.border.strong">#767676</Color>
+      <Color x:Key="bc.status.success">#9FD89F</Color><Color x:Key="bc.status.success.onSurface">#A6E2A6</Color><Color x:Key="bc.status.warning">#FCE100</Color><Color x:Key="bc.status.warning.onSurface">#FCE100</Color><Color x:Key="bc.status.danger">#F1707B</Color><Color x:Key="bc.status.danger.onSurface">#F48B94</Color>
+      <Color x:Key="bc.scrim">#8A000000</Color><Color x:Key="bc.focus.outer">#FFFFFF</Color><Color x:Key="bc.focus.inner">#202020</Color>
+      <BoxShadows x:Key="bc.focus.ring.primary">0 0 0 2 #FFFFFF</BoxShadows>
+    </ResourceDictionary>
+    <!-- System means the active Avalonia platform/application Light or Dark variant; it is not a third palette. -->
+    <ResourceDictionary x:Key="Default">
+      <Color x:Key="bc.bg.base">#FFFFFF</Color><Color x:Key="bc.bg.card">#F7F7F7</Color><Color x:Key="bc.bg.subtle">#EBEBEB</Color>
+      <Color x:Key="bc.text.primary">#1B1B1B</Color><Color x:Key="bc.text.secondary">#4A4A4A</Color><Color x:Key="bc.text.disabled">#8C8C8C</Color>
+      <Color x:Key="bc.accent.default">#0F6CBD</Color><Color x:Key="bc.accent.hover">#115EA3</Color><Color x:Key="bc.accent.pressed">#0C3B5E</Color><Color x:Key="bc.accent.onAccent">#FFFFFF</Color>
+      <Color x:Key="bc.border.subtle">#E0E0E0</Color><Color x:Key="bc.border.strong">#8A8A8A</Color>
+      <Color x:Key="bc.status.success">#107C10</Color><Color x:Key="bc.status.success.onSurface">#0E6B0E</Color><Color x:Key="bc.status.warning">#9D4D00</Color><Color x:Key="bc.status.warning.onSurface">#8A4300</Color><Color x:Key="bc.status.danger">#C42B1C</Color><Color x:Key="bc.status.danger.onSurface">#B22416</Color>
+      <Color x:Key="bc.scrim">#52000000</Color><Color x:Key="bc.focus.outer">#1B1B1B</Color><Color x:Key="bc.focus.inner">#FFFFFF</Color>
+      <BoxShadows x:Key="bc.focus.ring.primary">0 0 0 2 #1B1B1B</BoxShadows>
+    </ResourceDictionary>
+
+    <!-- HIGH CONTRAST OVERLAY.
+         The key is an x:Static reference to the ONE code-defined ThemeVariant instance, because
+         Avalonia's ThemeVariantTypeConverter accepts only the built-in variants and throws for a
+         string key (that throw is what killed every launch). The full reasoning, including why a
+         built-in key cannot be reused, is on PickerThemeVariants in code.
+
+         THE VALUES ARE ALIASES INTO THE PLATFORM FLUENT BRUSHES, and the shape is load-bearing.
+         `<StaticResource x:Key="..." ResourceKey="..."/>` copies the REFERENCED BRUSH into this
+         dictionary, so consumers receive an IBrush. The shape this file used before -
+         `<DynamicResource .../>` as the VALUE - does not: it stores a DynamicResourceExtension,
+         and the property store throws InvalidCastException the moment a consumer binds it to a
+         Brush property.
+
+         EVERY ResourceKey BELOW IS VERIFIED TO EXIST in Avalonia.Themes.Fluent 11.3.18
+         (enumerated from the theme's own Default/Dark resource dictionaries). A StaticResource
+         whose target is absent throws KeyNotFoundException at RESOLUTION time - i.e. only once
+         the OS high-contrast setting turns this dictionary on - so a name that merely looks
+         plausible is a latent launch-killing bug. The two HotLight aliases this file used to
+         carry (SystemControlHotLightBrush) were exactly that: 0 hits in the shipped theme.
+         SystemControlErrorTextForegroundBrush is used for both hot status roles instead; it is
+         the one existing brush whose role is "hot foreground".
+
+         NO PROJECT PALETTE IS INVENTED HERE - BUT THESE ARE NOT THE USER'S SYSTEM COLOURS.
+         The SystemControl* brushes below are FluentTheme's own fixed Light/Dark values, not the
+         Windows high-contrast scheme: Avalonia 11.3 reports only that high contrast is on and
+         whether the scheme is light or dark, never its colours, and FluentTheme ships no HC
+         palette. Because the variant inherits Light (PickerThemeVariants), they resolve to the
+         LIGHT Fluent values, also under a dark HC scheme. Strong contrast, not the user's
+         palette - see PickerThemeVariants (known limitation). -->
+    <ResourceDictionary x:Key="{x:Static p:PickerThemeVariants.HighContrast}">
+      <StaticResource x:Key="bc.bg.base" ResourceKey="SystemControlBackgroundAltHighBrush" />
+      <StaticResource x:Key="bc.bg.card" ResourceKey="SystemControlBackgroundChromeMediumLowBrush" />
+      <!-- OPAQUE on purpose: bc.bg.subtle is the Settings WINDOW background and the picker hover
+           fill. SystemControlBackgroundBaseLowBrush (used before) is #33000000 - a top-level
+           window painted 20 % black over nothing (visual audit). -->
+      <StaticResource x:Key="bc.bg.subtle" ResourceKey="SystemControlBackgroundChromeMediumBrush" />
+      <StaticResource x:Key="bc.text.primary" ResourceKey="SystemControlForegroundBaseHighBrush" />
+      <StaticResource x:Key="bc.text.secondary" ResourceKey="SystemControlForegroundBaseMediumHighBrush" />
+      <StaticResource x:Key="bc.text.disabled" ResourceKey="SystemControlDisabledBaseMediumLowBrush" />
+      <StaticResource x:Key="bc.accent.default" ResourceKey="SystemControlHighlightAltAccentBrush" />
+      <StaticResource x:Key="bc.accent.hover" ResourceKey="SystemControlHighlightAltAccentBrush" />
+      <StaticResource x:Key="bc.accent.pressed" ResourceKey="SystemControlHighlightAltAccentBrush" />
+      <StaticResource x:Key="bc.accent.onAccent" ResourceKey="SystemControlHighlightAltBaseHighBrush" />
+      <StaticResource x:Key="bc.border.subtle" ResourceKey="SystemControlForegroundBaseMediumHighBrush" />
+      <StaticResource x:Key="bc.border.strong" ResourceKey="SystemControlForegroundBaseHighBrush" />
+      <StaticResource x:Key="bc.status.success" ResourceKey="SystemControlForegroundBaseHighBrush" />
+      <StaticResource x:Key="bc.status.success.onSurface" ResourceKey="SystemControlForegroundBaseHighBrush" />
+      <StaticResource x:Key="bc.status.warning" ResourceKey="SystemControlErrorTextForegroundBrush" />
+      <StaticResource x:Key="bc.status.warning.onSurface" ResourceKey="SystemControlErrorTextForegroundBrush" />
+      <StaticResource x:Key="bc.status.danger" ResourceKey="SystemControlErrorTextForegroundBrush" />
+      <StaticResource x:Key="bc.status.danger.onSurface" ResourceKey="SystemControlErrorTextForegroundBrush" />
+      <StaticResource x:Key="bc.scrim" ResourceKey="SystemControlBackgroundBaseLowBrush" />
+      <!-- The two-token focus treatment needs an opaque ring AND an opaque separation surface: a
+           translucent inner token would let the card behind it show through the focus state. -->
+      <StaticResource x:Key="bc.focus.outer" ResourceKey="SystemControlFocusVisualPrimaryBrush" />
+      <StaticResource x:Key="bc.focus.inner" ResourceKey="SystemControlBackgroundAltHighBrush" />
+      <!-- The resolved SystemControlFocusVisualPrimaryBrush (bc.focus.outer above) is #000000 in
+           the Light-based HC variant; restated because a BoxShadows cannot alias a brush. -->
+      <BoxShadows x:Key="bc.focus.ring.primary">0 0 0 2 #000000</BoxShadows>
+      <x:Boolean x:Key="bc.material.transparency.enabled">False</x:Boolean>
+      <!-- bc.motion.transitions.enabled is NOT redeclared here either: the application writes
+           it from the OS setting, and a declaration in ANY dictionary this window merges would
+           shadow that write. Reduced motion is a global OS preference, not a per-theme one, so
+           the high-contrast variant has no separate value to state. -->
+      <!-- Elevation is zeroed in high contrast, declared as x:String to match the ROOT declaration:
+           the same key must not change type between dictionaries. -->
+      <x:String x:Key="bc.elevation.card">0 0 0 0 #00000000</x:String>
+      <x:String x:Key="bc.elevation.flyout">0 0 0 0 #00000000</x:String>
+      <x:String x:Key="bc.elevation.dialog">0 0 0 0 #00000000</x:String>
+    </ResourceDictionary>
+  </ResourceDictionary.ThemeDictionaries>
+</ResourceDictionary>

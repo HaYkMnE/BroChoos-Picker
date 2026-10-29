@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <!-- This project exercises release-engineering artifacts (the W10.1 per-user
+         installer script, packager, and their evidence), so it needs the Windows
+         target platform for the same reason the product does. No product assembly
+         reference is required: the installer and packager are text/process artifacts,
+         not managed types. -->
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" PrivateAssets="all" />
+    <!-- Runtime skips for environment preconditions (no ISCC, pin == installed). Version is
+         pinned centrally in Directory.Packages.props; already used by Platform.Windows.Tests. -->
+    <PackageReference Include="Xunit.SkippableFact" PrivateAssets="all" />
+    <PackageReference Include="FluentAssertions" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,42 @@
+{
+  "version": "0.0.0",
+  "description": "BroChoos Picker: choose which browser opens each link on Windows (portable build).",
+  "homepage": "https://github.com/HaYkMnE/BroChoos-Picker",
+  "license": "MIT",
+  "notes": [
+    "Portable build: settings are kept in $dir\\BroChoosConfig (persisted across updates).",
+    "To offer BroChoos Picker as a browser in Windows Settings, run: brochoos --register"
+  ],
+  "architecture": {
+    "64bit": {
+      "url": "https://github.com/HaYkMnE/BroChoos-Picker/releases/download/v0.0.0/BroChoos-Picker-0.0.0-x64-portable.zip",
+      "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+    }
+  },
+  "bin": [
+    [
+      "BroChoos.exe",
+      "brochoos"
+    ]
+  ],
+  "shortcuts": [
+    [
+      "BroChoos.exe",
+      "BroChoos Picker"
+    ]
+  ],
+  "persist": "BroChoosConfig",
+  "checkver": {
+    "github": "https://github.com/HaYkMnE/BroChoos-Picker"
+  },
+  "autoupdate": {
+    "architecture": {
+      "64bit": {
+        "url": "https://github.com/HaYkMnE/BroChoos-Picker/releases/download/v$version/BroChoos-Picker-$version-x64-portable.zip",
+        "hash": {
+          "url": "https://github.com/HaYkMnE/BroChoos-Picker/releases/download/v$version/SHA256SUMS.txt"
+        }
+      }
+    }
+  }
+}

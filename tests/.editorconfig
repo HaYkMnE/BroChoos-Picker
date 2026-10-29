@@ -1,0 +1,16 @@
+root = false
+
+# Test names intentionally use underscores and xUnit collection suffixes. Keep this
+# naming policy test-only; production projects retain the repository defaults.
+[*.cs]
+dotnet_diagnostic.CA1707.severity = none
+dotnet_diagnostic.CA1711.severity = none
+# JSON002 ("probable JSON string detected") is a low-confidence IDE-only heuristic, not
+# a JSON validator: it pattern-matches text that LOOKS like JSON and fires on a handful
+# of fixtures in the test source files that embed a whole document as a string literal on
+# purpose. It offers only an in-IDE annotation fix (`//lang=json`) and is not reported by
+# command-line builds, so `dotnet format` can never clear it - it can only ever be noise
+# in a test project whose job is to feed malformed and well-formed JSON to parsers.
+# Suppressed test-wide rather than per-site; the handful of real sites do not justify
+# sprinkling pragmas through the fixtures.
+dotnet_diagnostic.JSON002.severity = none

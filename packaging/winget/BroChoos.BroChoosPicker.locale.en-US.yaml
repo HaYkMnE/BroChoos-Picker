@@ -1,0 +1,25 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.12.0.schema.json
+# Template. tools/update-winget-manifest.ps1 fills the double-underscore placeholders for one release.
+# Publisher and PackageName must equal AppPublisher and AppName in
+# packaging/BroChoos.Installer/BroChoos.per-user.iss.
+PackageIdentifier: BroChoos.BroChoosPicker
+PackageVersion: __VERSION__
+PackageLocale: en-US
+Publisher: BroChoos
+PublisherUrl: https://github.com/HaYkMnE
+PublisherSupportUrl: https://github.com/HaYkMnE/BroChoos-Picker/issues
+PackageName: BroChoos Picker
+PackageUrl: https://github.com/HaYkMnE/BroChoos-Picker
+License: MIT
+# Pinned to the release tag, so each manifest links the LICENSE that shipped with that version.
+LicenseUrl: https://github.com/HaYkMnE/BroChoos-Picker/blob/v__VERSION__/LICENSE
+ShortDescription: Choose which browser opens each link on Windows.
+Moniker: brochoos-picker
+Tags:
+  - browser
+  - browser-picker
+  - default-browser
+  - links
+ReleaseNotesUrl: https://github.com/HaYkMnE/BroChoos-Picker/releases/tag/v__VERSION__
+ManifestType: defaultLocale
+ManifestVersion: 1.12.0

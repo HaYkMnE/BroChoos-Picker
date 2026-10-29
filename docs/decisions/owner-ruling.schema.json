@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://brochoos.local/schemas/owner-ruling.schema.json",
+  "title": "BroChoos Owner Ruling",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "recordVersion",
+    "subjectId",
+    "resolutionState",
+    "scope",
+    "signerIdentityModel",
+    "trustAnchorLifecycle",
+    "authority",
+    "validation"
+  ],
+  "properties": {
+    "schemaVersion": { "type": "string", "minLength": 1 },
+    "recordVersion": { "type": "string", "minLength": 1 },
+    "subjectId": { "type": "string", "pattern": "^[A-Z0-9._-]+$" },
+    "resolutionState": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["disposition", "priorStatus"],
+      "properties": {
+        "disposition": { "type": "string", "enum": ["approved", "rejected", "deferred"] },
+        "priorStatus": { "type": "string", "minLength": 1 }
+      }
+    },
+    "scope": { "type": "string", "minLength": 1 },
+    "signerIdentityModel": { "type": "string", "minLength": 1 },
+    "trustAnchorLifecycle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provisioning", "storage", "rotation", "revocation", "constraints"],
+      "properties": {
+        "provisioning": { "type": "string", "minLength": 1 },
+        "storage": { "type": "string", "minLength": 1 },
+        "rotation": { "type": "string", "minLength": 1 },
+        "revocation": { "type": "string", "minLength": 1 },
+        "constraints": { "type": "string", "minLength": 1 }
+      }
+    },
+    "authority": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source", "approver", "approvedAtUtc"],
+      "properties": {
+        "source": { "type": "string", "minLength": 1 },
+        "approver": { "type": "string", "minLength": 1 },
+        "approvedAtUtc": { "type": "string", "format": "date-time" }
+      }
+    },
+    "validation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "reviewedBy", "reviewedAtUtc"],
+      "properties": {
+        "status": { "type": "string", "enum": ["PASS", "FAIL", "PENDING"] },
+        "reviewedBy": { "type": "string", "minLength": 1 },
+        "reviewedAtUtc": { "type": "string", "format": "date-time" }
+      }
+    },
+    "publicTrustMetadata": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "notes": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  }
+}

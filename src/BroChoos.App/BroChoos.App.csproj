@@ -1,0 +1,264 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <!-- Must match BroChoos.Platform.Windows' platform version (project reference compatibility). -->
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <AssemblyName>BroChoos</AssemblyName>
+    <RootNamespace>BroChoos.App</RootNamespace>
+    <PublishSingleFile>false</PublishSingleFile>
+    <SelfContained>$(BroChoosSelfContained)</SelfContained>
+    <AssemblyTitle>BroChoos Picker</AssemblyTitle>
+    <!-- Win32 icon resource of BroChoos.exe (Explorer, Start menu, Add/Remove Programs via
+         UninstallDisplayIcon). The window/taskbar icon is the AvaloniaResource below. -->
+    <ApplicationIcon>Assets\brochoos.ico</ApplicationIcon>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\BroChoos.Core\BroChoos.Core.csproj" />
+    <ProjectReference Include="..\BroChoos.Platform.Windows\BroChoos.Platform.Windows.csproj" />
+  </ItemGroup>
+
+  <!-- W8.1: the Settings search aliases SHIP INSIDE THE ASSEMBLY. The file is not copied to
+       the output directory, so before this it existed only in the source tree and could not
+       be read by the running product at all — a search box over aliases that were never
+       loadable. Embedding it keeps the alias table with the code that consumes it and needs
+       no runtime path resolution (a shipped app must not depend on a loose JSON file next to
+       the exe). The logical name is used verbatim by SettingsSearchAliases.Load(). -->
+  <ItemGroup>
+    <EmbeddedResource Include="Settings\search-aliases.json" LogicalName="BroChoos.App.Settings.search-aliases.json" />
+  </ItemGroup>
+
+  <!-- Window icon, loaded as avares://BroChoos/Assets/brochoos.ico by the windows that can appear
+       in the taskbar or Alt+Tab (SettingsWindow; PickerWindow too, harmlessly). -->
+  <ItemGroup>
+    <AvaloniaResource Include="Assets\brochoos.ico" />
+  </ItemGroup>
+
+  <!-- THE FOUR HELPER EXECUTABLES SHIP NEXT TO BroChoos.exe, and before this ItemGroup existed
+       they shipped NOWHERE. The App launches every helper by PATH — BroChoos.LaunchHelper.exe
+       (LaunchHelperProcessRunner.ResolveHelperPath), BroChoos.StorageHelper.exe
+       (StorageHelperClient), BroChoos.NetworkHelper.exe (NetworkHelperProcessRunner) — each
+       resolved from the directory of the running BroChoos.exe. Nothing built them into that
+       directory: the App's own publish contained zero helper executables, and the installer
+       packages the publish directory, so a packaged build could not launch a browser or
+       resolve a short link at all. It failed silently, as a missing-file error code.
+
+       ReferenceOutputAssembly="false" IS LOAD-BEARING, not a detail. The App talks to helpers
+       over IPC through Core contracts and must never link their assemblies — that separation
+       is asserted by App_ReferencesHelperClientContracts_AndDoesNotReference_HelperImplementations
+       in the architecture suite, which reads the App assembly's reference list. false keeps
+       the helpers OUT of that list while still putting them in the build ORDER, so they are
+       always built before the App copies from them.
+
+       OutputItemType="HelperBuildOutput" IS THE OTHER HALF. It makes the standard project
+       reference protocol hand back each helper's TargetPath (its built .dll, with the correct
+       Configuration/Platform/TargetFramework already applied by MSBuild), which the targets
+       below turn into the files to deploy. The alternative — rebuilding each helper's output
+       path from $(Configuration) and the TFM by hand — is exactly the class of guess that made
+       the architecture suite fail in Release, so it is not repeated here.
+
+       Private="false" IS NOT REDUNDANT WITH ReferenceOutputAssembly="false", and leaving it out
+       is a build break rather than a subtlety. The two flags govern different pipelines:
+       ReferenceOutputAssembly keeps the helper's ASSEMBLY out of the App's compile references
+       (the architecture gate), while Private keeps the helper's OUTPUT DIRECTORY out of the
+       App's publish/`content` copy. With only the first set, the SDK's own child-project copy
+       pulls each helper's apphost into the publish list as "<name>.exe" — and so does the
+       explicit deployment below, which is how the two produced
+       NETSDK1152 "multiple publish output files with the same relative path". Suppressing the
+       SDK's half leaves exactly one owner of those four filenames: the target below, which
+       copies the COMPLETE set. The SDK's half was incomplete anyway — it brought the .exe and
+       left behind the .dll, .deps.json and .runtimeconfig.json the exe needs to start, so a
+       helper published that way would have failed at launch. -->
+  <ItemGroup>
+    <ProjectReference Include="..\BroChoos.LaunchHelper\BroChoos.LaunchHelper.csproj"
+                      ReferenceOutputAssembly="false"
+                      Private="false"
+                      OutputItemType="HelperBuildOutput" />
+    <ProjectReference Include="..\BroChoos.StorageHelper\BroChoos.StorageHelper.csproj"
+                      ReferenceOutputAssembly="false"
+                      Private="false"
+                      OutputItemType="HelperBuildOutput" />
+    <ProjectReference Include="..\BroChoos.NetworkHelper\BroChoos.NetworkHelper.csproj"
+                      ReferenceOutputAssembly="false"
+                      Private="false"
+                      OutputItemType="HelperBuildOutput" />
+    <ProjectReference Include="..\BroChoos.UpdateHelper\BroChoos.UpdateHelper.csproj"
+                      ReferenceOutputAssembly="false"
+                      Private="false"
+                      OutputItemType="HelperBuildOutput" />
+  </ItemGroup>
+
+  <!-- THE DEPLOYMENT ITSELF: WHAT GETS COPIED, AND WHERE.
+
+       Each helper needs four files to START, and leaving any one out produces a process that
+       fails at launch rather than at build time, which is the failure mode this whole change
+       exists to remove:
+
+         <name>.exe               the apphost the App actually starts by path
+         <name>.dll               the managed assembly the apphost loads
+         <name>.deps.json         how the host resolves BroChoos.Core and the framework
+         <name>.runtimeconfig.json the framework version and roll-forward policy
+
+       Everything ELSE in a helper's output directory is deliberately NOT copied. A helper's
+       directory also contains its own copies of BroChoos.Core.dll, BroChoos.Platform.Windows.dll
+       and the Microsoft.Extensions.* packages; the App directory already holds those from the
+       App's own build, and copying a second copy over them would make the shipped versions
+       depend on copy order. The four files above are exactly the set the App directory does
+       not already provide.
+
+       THE PATHS COME FROM THE BUILD, NOT FROM A GUESS. @(HelperBuildOutput) carries each
+       helper's own TargetPath as computed by MSBuild with the right Configuration, Platform
+       and TargetFramework applied. Deriving those directories by hand from $(Configuration)
+       is what made the architecture suite fail in Release; this target reuses MSBuild's
+       answer instead of reproducing it. -->
+  <Target Name="_ResolveHelperDeploymentFiles">
+    <Error Condition="'@(HelperBuildOutput)' == ''"
+           Text="No helper projects resolved. The ProjectReferences to the four helper projects with OutputItemType=&quot;HelperBuildOutput&quot; must be present, or the App ships with no helpers and cannot launch a browser." />
+
+    <ItemGroup>
+      <_HelperDeploymentFile Include="%(HelperBuildOutput.RootDir)%(HelperBuildOutput.Directory)%(HelperBuildOutput.Filename).exe" />
+      <_HelperDeploymentFile Include="%(HelperBuildOutput.RootDir)%(HelperBuildOutput.Directory)%(HelperBuildOutput.Filename).dll" />
+      <_HelperDeploymentFile Include="%(HelperBuildOutput.RootDir)%(HelperBuildOutput.Directory)%(HelperBuildOutput.Filename).deps.json" />
+      <_HelperDeploymentFile Include="%(HelperBuildOutput.RootDir)%(HelperBuildOutput.Directory)%(HelperBuildOutput.Filename).runtimeconfig.json" />
+    </ItemGroup>
+  </Target>
+
+  <!-- BUILD OUTPUT. Runs after ResolveProjectReferences, which is where the helpers are built
+       and @(HelperBuildOutput) is populated, and before IncrementalClean, which later reads
+       @(FileWrites) to decide what is stale.
+
+       THE FileWrites ENTRY IS UNCONDITIONAL ON PURPOSE. Copy only reports files it actually
+       copied, and SkipUnchangedFiles means a second build copies nothing — so recording
+       CopiedFiles would leave the helpers out of the second build's FileWrites, IncrementalClean
+       would find them in the previous build's list and NOT in the current one, and it would
+       delete them from the output directory. Listing the destinations here keeps them current
+       on every build, so they survive IncrementalClean and are still removed by `dotnet clean`. -->
+  <Target Name="CopyHelperExecutablesToOutputDirectory"
+          AfterTargets="ResolveProjectReferences"
+          DependsOnTargets="_ResolveHelperDeploymentFiles">
+    <!-- $(OutDir) is RELATIVE in this project ("bin\x64\Release\...\win-x64\"), so it is
+         normalized before being used as a destination and recorded. Copy resolves a relative
+         destination against the project directory while FindUnderPath (which reads these
+         records back during IncrementalClean and Clean) compares against an absolute
+         $(OutDir); recording relative paths would make the two disagree. -->
+    <PropertyGroup>
+      <_HelperDeploymentOutputDirectory>$([MSBuild]::NormalizeDirectory($(OutDir)))</_HelperDeploymentOutputDirectory>
+    </PropertyGroup>
+
+    <Copy SourceFiles="@(_HelperDeploymentFile)"
+          DestinationFolder="$(_HelperDeploymentOutputDirectory)"
+          SkipUnchangedFiles="true" />
+
+    <ItemGroup>
+      <FileWrites Include="@(_HelperDeploymentFile->'$(_HelperDeploymentOutputDirectory)%(Filename)%(Extension)')" />
+    </ItemGroup>
+  </Target>
+
+  <!-- PUBLISH. Adding the same files to ResolvedFileToPublish is what puts them in the publish
+       directory, and it does so through the standard pipeline rather than a second copy of the
+       logic: RelativePath places each file at the publish root next to BroChoos.exe, and
+       PreserveNewest gives it the same freshness handling as every other published file.
+
+       The hook point matters. ComputeResolvedFilesToPublishList builds the list, and
+       _HandleFileConflictsForPublish (AfterTargets=ComputeFilesToPublish) rejects duplicate
+       RelativePaths, so these items must be added after the list is computed and before that
+       check — which is exactly what AfterTargets=ComputeResolvedFilesToPublishList does. The
+       publish pipeline also derives its "files produced by this publish" list from
+       ResolvedFileToPublish, so helpers added here are tracked, not deleted as orphans by a
+       later publish. -->
+  <Target Name="AddHelperExecutablesToPublishList"
+          AfterTargets="ComputeResolvedFilesToPublishList"
+          DependsOnTargets="_ResolveHelperDeploymentFiles">
+    <ItemGroup>
+      <ResolvedFileToPublish Include="@(_HelperDeploymentFile)">
+        <RelativePath>%(Filename)%(Extension)</RelativePath>
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      </ResolvedFileToPublish>
+    </ItemGroup>
+  </Target>
+
+  <!-- createdump.exe IS LEFT OUT OF THE SELF-CONTAINED PUBLISH. The SDK has no property for it
+       (Microsoft.NET.Sdk 10.0.201 targets and build tasks never name it); it arrives as an ordinary
+       native file of the runtime pack (RuntimeList.xml). The runtime runs it only to write a crash
+       dump when DOTNET_DbgEnableMiniDump is set, which a shipped app never sets, and the portable
+       winget install puts this folder on PATH, so it would be one more stray command there.
+       The helpers ship only their own four files (see above), so the App's publish list is the
+       only place it enters. tools/build-release.ps1 fails if it ever comes back and proves the
+       exe and every helper still start without it. -->
+  <Target Name="ExcludeCreateDumpFromPublish" AfterTargets="ComputeResolvedFilesToPublishList">
+    <ItemGroup>
+      <ResolvedFileToPublish Remove="@(ResolvedFileToPublish)" Condition="'%(Filename)%(Extension)' == 'createdump.exe'" />
+    </ItemGroup>
+  </Target>
+
+  <!-- THE 0A-5 KILL-TEST SCAFFOLD IS EXCLUDED FROM EVERY NON-DEBUG BUILD, and this is a
+       SECURITY gate rather than tidiness. This application is a Windows URL handler: the OS
+       hands it URLs as command-line arguments through a registration whose open command is
+       "<exe>" "%1" (see WindowsCapabilityRegistrationService). Scaffold0A5 contains a mode
+       that, once triggered by an argument, performs a REAL AtomicJsonFileStore.Write to a
+       path named in the arguments and can call Environment.Exit from inside that write - and
+       it does so BEFORE Program reaches Bootstrap, which is where safe mode is honoured.
+       Nothing gated it, so it compiled into the Release output and any local process able to
+       start the exe with arguments reached it.
+
+       Removing the SOURCES is what makes the mode incapable of EXISTING in a shipped build,
+       which is strictly stronger than making it hard to reach: after this, the trigger string
+       is absent from the Release assembly altogether. The #if DEBUG inside each Scaffold0A5
+       file is a SECOND, INDEPENDENT gate for the same property - delete this ItemGroup and
+       the files still do not compile into Release. Program's call site is gated the same way,
+       so the hook cannot survive the type it calls.
+
+       DEBUG-SCOPED, not "not Release": a custom configuration must default to EXCLUDING the
+       scaffold, because a gate that has to be opted into is a gate somebody forgets. -->
+  <ItemGroup Condition="'$(Configuration)' != 'Debug'">
+    <Compile Remove="Scaffold0A5\**\*.cs" />
+  </ItemGroup>
+
+  <!-- THE 0A-3 PROBE SCAFFOLD GOES THE SAME WAY, and it is a SEPARATE ItemGroup rather than a
+       second Remove in the one above so each scaffold's gate can be read, dated and deleted on
+       its own when that scaffold goes.
+
+       LOWER SEVERITY THAN 0A-5, STATED SO NOBODY LEVELS IT UP OR DOWN BY GUESSWORK.
+       AvaloniaProbeRunner.Run() takes no arguments and performs no config write, so unlike the
+       0A-5 child there was no argument-supplied write path and nothing bypassed the safe-mode
+       ordering. What was wrong is narrower and still real: the hook in Program was
+       unconditional, so a shipped Release exe accepted an undocumented argument - in ANY
+       position, since IsTriggered tested the whole array - and started a UI lifetime on it. For
+       a Windows URL handler, whose open command is "<exe>" "%1", every accepted argument is
+       reachable by anything that can ask the shell to open a URL. The comment that used to
+       justify this ("absent from HelpText and unknown to CliParser") was the fallacy NOT
+       DOCUMENTED IS NOT NOT REACHABLE.
+
+       Same three-part mechanism as 0A-5, because it was applied here and verified to work:
+       this Remove, an #if DEBUG wrapping each Scaffold0A3 source WHOLE (using, namespace and
+       type declaration alike), and an #if DEBUG on the call site in Program.cs together with
+       ITS using - that last pairing is what makes a half-deletion a loud compile error rather
+       than a silent regression.
+
+       DEBUG-SCOPED, not "not Release", for the same reason as above: a custom configuration
+       must default to EXCLUDING the scaffold, because a gate that has to be opted into is a
+       gate somebody forgets.
+
+       NO TEST FOLLOWS THIS ONE OUT. Unlike Scaffold0A5, nothing under tests\ or tools\ names
+       Scaffold0A3, AvaloniaProbeRunner or the trigger sentinel (the value of
+       AvaloniaProbeRunner.TriggerArgument, which cannot be spelled out here because an XML
+       comment may not contain a double hyphen), so this exclusion removes ZERO tests and the
+       Debug/Release test delta is unchanged by it. tools\smoke-launch.ps1 and
+       tools\url-activation-sim.ps1 mention "0A-3" only as a milestone name in prose; neither
+       invokes the probe. -->
+  <ItemGroup Condition="'$(Configuration)' != 'Debug'">
+    <Compile Remove="Scaffold0A3\**\*.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Versions come from Directory.Packages.props (central pinning); none here on purpose. -->
+    <!-- UI stack lives in App only: Core stays platform-neutral, Platform.Windows stays UI-free. -->
+    <PackageReference Include="Avalonia" />
+    <PackageReference Include="Avalonia.Desktop" />
+    <PackageReference Include="Avalonia.Themes.Fluent" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
+    <PackageReference Include="Microsoft.Extensions.Logging" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Console" />
+  </ItemGroup>
+</Project>

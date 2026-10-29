@@ -1,0 +1,34 @@
+<ResourceDictionary xmlns="https://github.com/avaloniaui"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:sys="clr-namespace:System;assembly=System.Runtime">
+  <!-- W5.4: English (source) localization resources. Keys are IDs, values are English strings. -->
+  <!-- All visible UI strings must be referenced via DynamicResource or LocalizationService.GetString(key) -->
+  
+  <!-- Picker Window -->
+  <sys:String x:Key="picker.select.hints">1-9 select  ·  Tab/arrows move  ·  Enter open  ·  Ctrl+C copy  ·  Esc cancel</sys:String>
+  
+  <!-- Ghost Toast (3s, non-interactive) -->
+  <sys:String x:Key="GhostToast.Opened">Opened</sys:String>
+  
+  <!-- Cleanup Recovery Toast (8s, interactive) -->
+  <sys:String x:Key="CleanupToast.Title">Cleanup recovery</sys:String>
+  <sys:String x:Key="CleanupToast.RestoreButton">Restore</sys:String>
+  
+  <!-- Picker ViewModel Status Messages -->
+  <sys:String x:Key="Status.LaunchFailure">Could not open {0} ({1}). Try another card, F for system, Ctrl+C to copy, Esc to cancel.</sys:String>
+  <sys:String x:Key="Status.Copied">URL copied to the clipboard.</sys:String>
+  <sys:String x:Key="Status.CopyFailed">Copy failed. The URL is still visible in the link card above.</sys:String>
+
+  <!-- W7.2 rule/ranking reason vocabulary: every non-default ordering has a visible reason and the word "Recommended" is forbidden. -->
+  <sys:String x:Key="Suggestion.Reason.MatchedRule">Suggested by rule: {0}</sys:String>
+  <sys:String x:Key="Suggestion.Reason.MatchedRuleGeneric">Suggested by a matched rule</sys:String>
+  <sys:String x:Key="Suggestion.Reason.RecentSession">Recent choice in this session</sys:String>
+  <sys:String x:Key="Suggestion.Reason.ProbableSource">Likely opened from the source app</sys:String>
+  <sys:String x:Key="Suggestion.Reason.AllChoices">All choices</sys:String>
+  
+  <!-- First Run Prompt -->
+  <sys:String x:Key="FirstRun.Prompt">BroChoos hasn't searched this PC for browsers yet. Find browsers runs the search now, or skip and decide later.</sys:String>
+  <sys:String x:Key="FirstRun.FindBrowsers">Find browsers</sys:String>
+  <sys:String x:Key="FirstRun.AddManually">Add manually</sys:String>
+  <sys:String x:Key="FirstRun.Skip">Skip</sys:String>
+</ResourceDictionary>

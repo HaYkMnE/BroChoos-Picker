@@ -1,0 +1,242 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# One run per ref. A newer push to the same PR cancels the superseded run; pushes to main are
+# never cancelled, so every main commit keeps a complete result.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# Actions are pinned to full commit SHAs. Each SHA is the commit the named tag pointed to when it
+# was verified against the GitHub API (refs/tags/v4 -> commit, same commit as the patch tag in the
+# comment). Dependabot (.github/dependabot.yml, github-actions ecosystem) keeps them current.
+jobs:
+  format:
+    runs-on: windows-2022
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Setup .NET
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
+        with:
+          global-json-file: global.json
+      - name: Restore
+        run: dotnet restore BroChoos.sln
+      # Build before format. Without the build, `dotnet format` evaluates only the
+      # directly-referenced projects and SKIPS any project the solution references but
+      # never loaded, so a format error there passes CI unseen (App.Tests was skipped
+      # this way and only surfaced once the build ran first).
+      - name: Build
+        run: dotnet build BroChoos.sln --configuration Release --no-restore
+      - name: Format verification
+        run: dotnet format BroChoos.sln --verify-no-changes --no-restore
+
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Setup .NET
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
+        with:
+          global-json-file: global.json
+      - name: Restore
+        run: dotnet restore BroChoos.sln
+      - name: Build
+        run: dotnet build BroChoos.sln --configuration Release --no-restore
+
+  test:
+    runs-on: windows-2022
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Setup .NET
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
+        with:
+          global-json-file: global.json
+      - name: Restore
+        run: dotnet restore BroChoos.sln
+      - name: Build
+        run: dotnet build BroChoos.sln --configuration Release --no-restore
+      - name: Test
+        run: dotnet test BroChoos.sln --configuration Release --no-build --verbosity normal
+
+  # Debug-only code is compiled out of Release (Compile Remove + #if DEBUG on the Scaffold0A5
+  # sources), so its tests and the kill-process harness only exist in a Debug build.
+  test-debug:
+    runs-on: windows-2022
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Setup .NET
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
+        with:
+          global-json-file: global.json
+      - name: Restore
+        run: dotnet restore BroChoos.sln
+      - name: Build (Debug)
+        run: dotnet build BroChoos.sln --configuration Debug --no-restore
+      - name: Test (Debug)
+        run: dotnet test BroChoos.sln --configuration Debug --no-build --verbosity normal
+      # Safe on a runner: works only under %TEMP%\0a5-kill\<runId>, never writes the registry,
+      # opens no network connection, and kills only children it started (PID + name + exact
+      # StartTime). -SkipBuild reuses the Debug build above.
+      - name: Atomic-write kill-process test (Debug)
+        shell: powershell
+        run: |
+          powershell -NoProfile -ExecutionPolicy Bypass -File tools/atomic-kill-test.ps1 -SkipBuild
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+  # Windows PowerShell 5.1 script tests. None needs a .NET build.
+  powershell-tests:
+    runs-on: windows-2022
+    timeout-minutes: 30
+    # Pinned installer toolchain (record: docs/decisions/owner-rulings/installer-toolchain-approval.json).
+    # INNO_SETUP_SHA256 is the setup-file hash computed locally on 2026-10-27; it equals the
+    # GitHub-published asset digest of the immutable release is-6_7_2. INNO_SETUP_SIGNER_THUMBPRINT
+    # is the packager allowlist (packaging/BroChoos.Installer/package-per-user-installer.ps1).
+    env:
+      INNO_SETUP_VERSION: '6.7.2'
+      INNO_SETUP_URL: 'https://github.com/jrsoftware/issrc/releases/download/is-6_7_2/innosetup-6.7.2.exe'
+      INNO_SETUP_SHA256: '9F27F8386E554EB093336A1CA5C2DCACB7DBF04AB020889491D7AC53C38A12FF'
+      INNO_SETUP_SIGNER_THUMBPRINT: 'E0AB19C8D38CBF9C44709925122A7A02F8C70CB7'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      # Installs the pinned Inno Setup per-user, so its HKCU 'Inno Setup 6_is1' entry wins over any
+      # machine-wide copy on the image (the scripts read HKCU first). Its folder is prepended to PATH
+      # via GITHUB_PATH, so the installer script tests resolve this ISCC.exe before Program Files candidates.
+      - name: Install Inno Setup (pinned, hash + signer verified)
+        shell: powershell
+        timeout-minutes: 10
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $setup = Join-Path $env:RUNNER_TEMP "innosetup-$env:INNO_SETUP_VERSION.exe"
+          Invoke-WebRequest -UseBasicParsing -Uri $env:INNO_SETUP_URL -OutFile $setup
+
+          $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $setup).Hash
+          if ($hash -ne $env:INNO_SETUP_SHA256) {
+            throw "Inno Setup SHA-256 mismatch: expected $env:INNO_SETUP_SHA256, got $hash"
+          }
+
+          $sig = Get-AuthenticodeSignature -LiteralPath $setup
+          if ($sig.Status -ne 'Valid') { throw "Inno Setup setup signature status is '$($sig.Status)', expected Valid" }
+          if ($sig.SignerCertificate.Thumbprint -ne $env:INNO_SETUP_SIGNER_THUMBPRINT) {
+            throw "Inno Setup signer thumbprint '$($sig.SignerCertificate.Thumbprint)' is not the allowlisted $env:INNO_SETUP_SIGNER_THUMBPRINT"
+          }
+          Write-Host "Verified $setup sha256=$hash signer='$($sig.SignerCertificate.Subject)'"
+
+          $installDir = Join-Path $env:LOCALAPPDATA 'Programs\Inno Setup 6'
+          $log = Join-Path $env:RUNNER_TEMP 'innosetup-install.log'
+          $arguments = "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- /NOICONS /CURRENTUSER /DIR=`"$installDir`" /LOG=`"$log`""
+          $proc = Start-Process -FilePath $setup -ArgumentList $arguments -Wait -PassThru
+          if ($proc.ExitCode -ne 0) {
+            if (Test-Path -LiteralPath $log) { Get-Content -LiteralPath $log | Write-Host }
+            throw "Inno Setup installer exited with $($proc.ExitCode)"
+          }
+
+          $entry = Get-ItemProperty -LiteralPath 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Inno Setup 6_is1' -ErrorAction SilentlyContinue
+          if ($null -eq $entry -or $entry.DisplayVersion -ne $env:INNO_SETUP_VERSION) {
+            throw "HKCU 'Inno Setup 6_is1' DisplayVersion is '$($entry.DisplayVersion)', expected $env:INNO_SETUP_VERSION"
+          }
+          $iscc = Join-Path $installDir 'ISCC.exe'
+          if (-not (Test-Path -LiteralPath $iscc -PathType Leaf)) { throw "ISCC.exe not found at $iscc" }
+          $isccSig = Get-AuthenticodeSignature -LiteralPath $iscc
+          if ($isccSig.Status -ne 'Valid' -or $isccSig.SignerCertificate.Thumbprint -ne $env:INNO_SETUP_SIGNER_THUMBPRINT) {
+            throw "Installed ISCC.exe signature check failed (status '$($isccSig.Status)')"
+          }
+
+          Add-Content -LiteralPath $env:GITHUB_PATH -Value $installDir
+          Write-Host "Inno Setup $($entry.DisplayVersion) installed per-user at $installDir"
+      - name: Script tests (tools/tests/*.tests.ps1 + per-user installer tests)
+        shell: powershell
+        run: |
+          # EXCLUDED: tools/tests/capture-network.tests.ps1. It runs the REAL BroChoos.NetworkHelper
+          # with consent granted, and ShortLinkResolver resolves the short-link host (bit.ly) via
+          # real DNS (Dns.GetHostAddressesAsync) before the loopback proxy is used. That is
+          # outbound network traffic beyond loopback, so it stays a local/manual check.
+          $excluded = @('capture-network.tests.ps1')
+          $scripts = @(Get-ChildItem -LiteralPath 'tools/tests' -Filter '*.tests.ps1' |
+            Where-Object { $excluded -notcontains $_.Name } |
+            Sort-Object Name |
+            ForEach-Object { $_.FullName })
+          # The installer script tests need an installed, signed Inno Setup 6 (ISCC.exe + Compil32.exe and an
+          # 'Inno Setup 6_is1' uninstall entry). It only reads the registry and compiles into a
+          # %TEMP% sandbox; it writes nothing outside %TEMP%.
+          $scripts += (Resolve-Path 'tests/BroChoos.Release.Tests/w10.1-per-user-installer.tests.ps1').Path
+
+          $failed = @()
+          foreach ($script in $scripts) {
+            Write-Host "=== $script"
+            powershell -NoProfile -ExecutionPolicy Bypass -File $script
+            $code = $LASTEXITCODE
+            Write-Host "=== exit $code"
+            if ($code -ne 0) { $failed += "$script (exit $code)" }
+          }
+
+          if ($failed.Count -gt 0) {
+            Write-Host "Failed script tests:`n$($failed -join "`n")"
+            exit 1
+          }
+
+  audit:
+    runs-on: windows-2022
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Setup .NET
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
+        with:
+          global-json-file: global.json
+      - name: Restore
+        run: dotnet restore BroChoos.sln
+      - name: Vulnerability audit (collect)
+        shell: pwsh
+        run: |
+          # --project is REQUIRED: SDK 10.x rejects a positional solution/project
+          # argument here ("unrecognized argument"), so the positional form fails the
+          # job before any package is ever inspected.
+          dotnet package list --project BroChoos.sln --include-transitive --vulnerable --format json | Out-File -FilePath audit.json -Encoding utf8
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Fail on vulnerabilities
+        shell: pwsh
+        run: |
+          $raw = Get-Content -Raw -Path audit.json
+          $start = $raw.IndexOf('{')
+          $end = $raw.LastIndexOf('}')
+          if ($start -lt 0 -or $end -le $start) {
+            Write-Host "Could not parse 'dotnet package list' JSON output."
+            exit 1
+          }
+          $report = $raw.Substring($start, $end - $start + 1) | ConvertFrom-Json
+          $packages = foreach ($project in @($report.projects)) {
+            foreach ($framework in @($project.frameworks)) {
+              @($framework.topLevelPackages) + @($framework.transitivePackages)
+            }
+          }
+          $hits = foreach ($package in $packages) {
+            if ($null -ne $package -and $null -ne $package.vulnerabilities) {
+              foreach ($vuln in @($package.vulnerabilities)) {
+                [pscustomobject]@{
+                  Package  = $package.id
+                  Version  = $package.resolvedVersion
+                  Severity = $vuln.severity
+                  Advisory = $vuln.advisoryurl
+                }
+              }
+            }
+          }
+          $hits = @($hits)
+          if ($hits.Count -gt 0) {
+            Write-Host "Vulnerabilities found: $($hits.Count)"
+            $hits | Sort-Object Severity, Package | Format-Table -AutoSize | Out-String -Width 200 | Write-Host
+            exit 1
+          }
+          Write-Host "No known vulnerabilities in restored packages (top-level and transitive)."

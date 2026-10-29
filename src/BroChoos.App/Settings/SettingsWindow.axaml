@@ -1,0 +1,397 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="BroChoos.App.Settings.SettingsWindow"        Width="1120"
+        Icon="avares://BroChoos/Assets/brochoos.ico"
+        Height="760"
+        MinWidth="960"
+        MinHeight="680"
+        Title="{Binding WindowTitle}"
+        Background="{DynamicResource bc.bg.subtle}"
+        Foreground="{DynamicResource bc.text.primary}"
+        FontFamily="{DynamicResource bc.font.ui}">
+  <!-- THEME: the SAME token dictionary the picker uses (PickerTokens.axaml: Light, Dark and the
+       High Contrast overlay that defers to the platform's Fluent brushes), and SettingsApp sets
+       RequestedThemeVariant from the OS exactly as PickerApp does. No colour in this file is a
+       literal any more, so dark mode and high contrast both reach every surface. -->
+  <Window.Resources>
+    <ResourceDictionary>
+      <ResourceDictionary.MergedDictionaries>
+        <ResourceInclude Source="avares://BroChoos/Picker/PickerTokens.axaml" />
+      </ResourceDictionary.MergedDictionaries>
+    </ResourceDictionary>
+  </Window.Resources>
+  <Window.Styles>
+    <Style Selector="Border.surface">
+      <Setter Property="Background" Value="{DynamicResource bc.bg.base}"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource bc.border.subtle}"/>
+      <Setter Property="BorderThickness" Value="1"/>
+      <Setter Property="CornerRadius" Value="{DynamicResource bc.radius.card}"/>
+    </Style>
+    <Style Selector="Border.tile">
+      <Setter Property="Background" Value="{DynamicResource bc.bg.card}"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource bc.border.subtle}"/>
+      <Setter Property="BorderThickness" Value="1"/>
+      <Setter Property="CornerRadius" Value="{DynamicResource bc.radius.control}"/>
+      <Setter Property="Padding" Value="12"/>
+    </Style>
+    <Style Selector="Border.notice">
+      <Setter Property="Background" Value="{DynamicResource bc.bg.card}"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource bc.status.warning}"/>
+      <Setter Property="BorderThickness" Value="1"/>
+      <Setter Property="CornerRadius" Value="{DynamicResource bc.radius.control}"/>
+      <Setter Property="Padding" Value="12"/>
+    </Style>
+    <Style Selector="TextBlock.muted">
+      <Setter Property="Foreground" Value="{DynamicResource bc.text.secondary}"/>
+    </Style>
+    <Style Selector="TextBlock.groupLabel">
+      <Setter Property="Foreground" Value="{DynamicResource bc.text.secondary}"/>
+      <Setter Property="FontWeight" Value="SemiBold"/>
+      <Setter Property="FontSize" Value="{DynamicResource bc.type.caption}"/>
+    </Style>
+  </Window.Styles>
+  <Grid ColumnDefinitions="280,*" RowDefinitions="Auto,*" Margin="20">
+    <Border Grid.ColumnSpan="2"
+            Classes="surface"
+            Padding="14"
+            Margin="0,0,0,14">
+      <StackPanel Spacing="8">
+        <!-- Name: the watermark disappears once text is typed, so it cannot be the accessible
+             name. HelpText carries the examples line so a screen reader hears them too. -->
+        <TextBox x:Name="SettingsSearchBox"
+                 Watermark="{Binding SearchWatermarkText}"
+                 Text="{Binding SearchQuery, Mode=TwoWay}"
+                 AutomationProperties.Name="{Binding SearchAccessibleNameText}"
+                 AutomationProperties.HelpText="{Binding SearchExamplesText}"
+                 Width="560"
+                 HorizontalAlignment="Left">
+          <TextBox.KeyBindings>
+            <KeyBinding Gesture="Enter" Command="{Binding SearchCommand}" />
+          </TextBox.KeyBindings>
+        </TextBox>
+        <TextBlock Text="{Binding SearchExamplesText}"
+                   Classes="muted"
+                   TextWrapping="Wrap"
+                   FontSize="12" />
+        <TextBlock Text="{Binding SearchStatusText}"
+                   Classes="muted"
+                   TextWrapping="Wrap"
+                   FontSize="12"
+                   AutomationProperties.LiveSetting="Polite"
+                   IsVisible="{Binding SearchStatusText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+      </StackPanel>
+    </Border>
+
+    <Border Grid.Row="1"
+            Classes="surface"
+            Padding="12"
+            Margin="0,0,14,0">
+      <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+        <StackPanel Spacing="10">
+          <TextBlock Text="{Binding GroupExperienceText}"
+                     FontWeight="SemiBold"
+                     Classes="groupLabel" />
+          <Button Content="{Binding NavHomeText}"
+                  Command="{Binding SelectSectionCommand}"
+                  CommandParameter="home"
+                  HorizontalContentAlignment="Left" />
+          <Button Content="{Binding NavControlDepthText}"
+                  Command="{Binding SelectSectionCommand}"
+                  CommandParameter="control-depth"
+                  HorizontalContentAlignment="Left" />
+
+          <TextBlock Text="{Binding GroupContentText}"
+                     FontWeight="SemiBold"
+                     Classes="groupLabel"
+                     Margin="0,8,0,0" />
+          <Button Content="{Binding NavBrowsersProfilesText}"
+                  Command="{Binding SelectSectionCommand}"
+                  CommandParameter="browsers-profiles"
+                  HorizontalContentAlignment="Left" />
+          <Button Content="{Binding NavWhatBroChoosOpensText}"
+                  Command="{Binding SelectSectionCommand}"
+                  CommandParameter="what-brochoos-opens"
+                  HorizontalContentAlignment="Left" />
+          <Button Content="{Binding NavRulesSuggestionsText}"
+                  Command="{Binding SelectSectionCommand}"
+                  CommandParameter="rules-suggestions"
+                  HorizontalContentAlignment="Left" />
+
+          <TextBlock Text="{Binding GroupProtectionText}"
+                     FontWeight="SemiBold"
+                     Classes="groupLabel"
+                     Margin="0,8,0,0" />
+          <Button Content="{Binding NavPrivacyNetworkText}"
+                  Command="{Binding SelectSectionCommand}"
+                  CommandParameter="privacy-network"
+                  HorizontalContentAlignment="Left" />
+
+          <TextBlock Text="{Binding GroupInterfaceText}"
+                     FontWeight="SemiBold"
+                     Classes="groupLabel"
+                     Margin="0,8,0,0" />
+          <Button Content="{Binding NavAppearanceText}"
+                  Command="{Binding SelectSectionCommand}"
+                  CommandParameter="appearance"
+                  HorizontalContentAlignment="Left" />
+          <Button Content="{Binding NavHotkeysText}"
+                  Command="{Binding SelectSectionCommand}"
+                  CommandParameter="hotkeys"
+                  HorizontalContentAlignment="Left" />
+          <Button Content="{Binding NavLanguageText}"
+                  Command="{Binding SelectSectionCommand}"
+                  CommandParameter="language"
+                  HorizontalContentAlignment="Left" />
+
+          <TextBlock Text="{Binding GroupSystemText}"
+                     FontWeight="SemiBold"
+                     Classes="groupLabel"
+                     Margin="0,8,0,0" />
+          <Button Content="{Binding NavUpdatesText}"
+                  Command="{Binding SelectSectionCommand}"
+                  CommandParameter="updates"
+                  HorizontalContentAlignment="Left" />
+          <Button Content="{Binding NavMaintenanceText}"
+                  Command="{Binding SelectSectionCommand}"
+                  CommandParameter="maintenance"
+                  HorizontalContentAlignment="Left" />
+          <Button Content="{Binding NavAdvancedText}"
+                  Command="{Binding SelectSectionCommand}"
+                  CommandParameter="advanced"
+                  HorizontalContentAlignment="Left" />
+        </StackPanel>
+      </ScrollViewer>
+    </Border>
+
+    <Border Grid.Row="1"
+            Grid.Column="1"
+            Classes="surface"
+            Padding="18">
+      <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+        <StackPanel Spacing="12">
+          <TextBlock Text="{Binding SelectedSection.DisplayLabel}"
+                     FontSize="24"
+                     FontWeight="SemiBold"
+                     TextWrapping="Wrap" />
+          <TextBlock Text="{Binding SelectedSectionDescription}"
+                     Classes="muted"
+                     TextWrapping="Wrap" />
+
+          <!-- HOME: the truthful status dashboard. -->
+          <StackPanel Spacing="12" IsVisible="{Binding IsHomeSelected}">
+            <TextBlock Text="{Binding HomeSubtitleText}"
+                       Classes="muted" />
+
+            <Grid ColumnDefinitions="*,*" RowDefinitions="Auto,Auto,Auto,Auto" Margin="0,8,0,0">
+              <Border Grid.Row="0" Grid.Column="0" Margin="0,0,10,10" Classes="tile">
+                <StackPanel>
+                  <TextBlock Text="{Binding DashboardStatusLabelText}" FontWeight="SemiBold" />
+                  <TextBlock Text="{Binding DashboardStatusText}" TextWrapping="Wrap" />
+                </StackPanel>
+              </Border>
+
+              <Border Grid.Row="0" Grid.Column="1" Margin="0,0,0,10" Classes="tile">
+                <StackPanel>
+                  <TextBlock Text="{Binding DashboardDepthLabelText}" FontWeight="SemiBold" />
+                  <TextBlock Text="{Binding DashboardDepthText}" TextWrapping="Wrap" />
+                </StackPanel>
+              </Border>
+
+              <Border Grid.Row="1" Grid.Column="0" Margin="0,0,10,10" Classes="tile">
+                <StackPanel>
+                  <TextBlock Text="{Binding DashboardBrowserCountLabelText}" FontWeight="SemiBold" />
+                  <TextBlock Text="{Binding DashboardBrowserCountText}" TextWrapping="Wrap" />
+                </StackPanel>
+              </Border>
+
+              <Border Grid.Row="1" Grid.Column="1" Margin="0,0,0,10" Classes="tile">
+                <StackPanel>
+                  <TextBlock Text="{Binding DashboardProfileCountLabelText}" FontWeight="SemiBold" />
+                  <TextBlock Text="{Binding DashboardProfileCountText}" TextWrapping="Wrap" />
+                </StackPanel>
+              </Border>
+
+              <Border Grid.Row="2" Grid.Column="0" Margin="0,0,10,10" Classes="tile">
+                <StackPanel>
+                  <TextBlock Text="{Binding DashboardCoverageLabelText}" FontWeight="SemiBold" />
+                  <TextBlock Text="{Binding DashboardCoverageText}" TextWrapping="Wrap" />
+                </StackPanel>
+              </Border>
+
+              <Border Grid.Row="2" Grid.Column="1" Margin="0,0,0,10" Classes="tile">
+                <StackPanel>
+                  <TextBlock Text="{Binding DashboardPrivacyLabelText}" FontWeight="SemiBold" />
+                  <TextBlock Text="{Binding DashboardPrivacyText}" TextWrapping="Wrap" />
+                </StackPanel>
+              </Border>
+
+              <Border Grid.Row="3" Grid.Column="0" Margin="0,0,10,0" Classes="tile">
+                <StackPanel>
+                  <TextBlock Text="{Binding DashboardHealthLabelText}" FontWeight="SemiBold" />
+                  <TextBlock Text="{Binding DashboardHealthText}" TextWrapping="Wrap" />
+                </StackPanel>
+              </Border>
+
+              <Border Grid.Row="3" Grid.Column="1" Margin="0,0,0,0" Classes="tile">
+                <StackPanel>
+                  <TextBlock Text="{Binding DashboardUpdateLabelText}" FontWeight="SemiBold" />
+                  <TextBlock Text="{Binding DashboardUpdateText}" TextWrapping="Wrap" />
+                </StackPanel>
+              </Border>
+            </Grid>
+
+            <!-- WrapPanel, not a horizontal StackPanel: the Armenian labels are ~1.5x the English
+                 width and the fourth button ran past the window edge (visual audit). -->
+            <WrapPanel ItemSpacing="8" LineSpacing="8" Margin="0,8,0,0">
+              <Button Content="{Binding CheckWindowsSettingsButtonText}"
+                      Command="{Binding RequestCheckWindowsSettingsCommand}"
+                      MinWidth="170" />
+              <Button Content="{Binding OpenBrowsersButtonText}"
+                      Command="{Binding SelectSectionCommand}"
+                      CommandParameter="browsers-profiles"
+                      MinWidth="120" />
+              <Button Content="{Binding ChangeDepthButtonText}"
+                      Command="{Binding SelectSectionCommand}"
+                      CommandParameter="control-depth"
+                      MinWidth="120" />
+              <Button Content="{Binding ExportSettingsButtonText}"
+                      Command="{Binding RequestExportSettingsCommand}"
+                      MinWidth="120" />
+            </WrapPanel>
+          </StackPanel>
+
+          <!-- CONTROL DEPTH: the one safe preference, auto-saved through W3 mutation.
+               The editor is a plain ComboBox: standard control, Fluent theme styling, no new
+               visual design. Selecting a value saves immediately through the same mutation
+               path the dashboard uses, and the status line states truthfully whether the
+               change was saved or refused. -->
+          <StackPanel Spacing="10" IsVisible="{Binding IsControlDepthSelected}">
+            <TextBlock Text="{Binding ControlDepthDisplayText}" />
+            <TextBlock Text="{Binding ControlDepthEditorLabelText}"
+                       FontWeight="SemiBold" />
+            <!-- The visible label above is a plain TextBlock, which a screen reader does not
+                 associate with the ComboBox, so the name is set on the control itself. -->
+            <ComboBox x:Name="ControlDepthEditor"
+                      ItemsSource="{Binding ControlDepthChoiceTexts}"
+                      SelectedIndex="{Binding SelectedControlDepthIndex, Mode=TwoWay}"
+                      AutomationProperties.Name="{Binding ControlDepthEditorLabelText}"
+                      MinWidth="280"
+                      HorizontalAlignment="Left" />
+            <TextBlock Text="{Binding ControlDepthSaveStatusText}"
+                       TextWrapping="Wrap"
+                       FontSize="12"
+                       Classes="muted"
+                       AutomationProperties.LiveSetting="Polite"
+                       IsVisible="{Binding ControlDepthSaveStatusText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+          </StackPanel>
+
+          <!-- APPEARANCE: Picker layout. Same plain ComboBox pattern as Control depth; selecting
+               a value saves at once and the status line says whether it was saved. -->
+          <StackPanel Spacing="10" IsVisible="{Binding IsAppearanceSelected}">
+            <TextBlock Text="{Binding PickerLayoutEditorLabelText}"
+                       FontWeight="SemiBold" />
+            <ComboBox x:Name="PickerLayoutEditor"
+                      ItemsSource="{Binding PickerLayoutChoiceTexts}"
+                      SelectedIndex="{Binding SelectedPickerLayoutIndex, Mode=TwoWay}"
+                      AutomationProperties.Name="{Binding PickerLayoutEditorLabelText}"
+                      MinWidth="280"
+                      HorizontalAlignment="Left" />
+            <TextBlock Text="{Binding PickerLayoutSaveStatusText}"
+                       TextWrapping="Wrap"
+                       FontSize="12"
+                       Classes="muted"
+                       AutomationProperties.LiveSetting="Polite"
+                       IsVisible="{Binding PickerLayoutSaveStatusText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+          </StackPanel>
+
+          <!-- BROWSERS & PROFILES: separate Browsers / Profiles tabs. -->
+          <TabControl IsVisible="{Binding IsBrowsersProfilesSelected}">
+            <TabItem Header="{Binding BrowsersTabHeaderText}">
+              <TextBlock Text="{Binding BrowsersTabEmptyText}" TextWrapping="Wrap" />
+            </TabItem>
+            <TabItem Header="{Binding ProfilesTabHeaderText}">
+              <TextBlock Text="{Binding ProfilesTabEmptyText}" TextWrapping="Wrap" />
+            </TabItem>
+          </TabControl>
+
+          <!-- PRIVACY & NETWORK: truthful indicator chips. -->
+          <StackPanel Spacing="8" IsVisible="{Binding IsPrivacyNetworkSelected}">
+            <TextBlock Text="{Binding PrivacyHeadingText}"
+                       FontSize="18"
+                       FontWeight="SemiBold" />
+            <TextBlock Text="{Binding IndicatorTelemetryText}" TextWrapping="Wrap" />
+            <TextBlock Text="{Binding IndicatorTrackingCleanupText}" TextWrapping="Wrap" />
+            <TextBlock Text="{Binding IndicatorShortLinkText}" TextWrapping="Wrap" />
+            <TextBlock Text="{Binding IndicatorClipboardText}" TextWrapping="Wrap" />
+            <TextBlock Text="{Binding IndicatorHistoryText}" TextWrapping="Wrap" />
+            <TextBlock Text="{Binding PrivacyHistoryAllowlistText}" TextWrapping="Wrap" />
+            <TextBlock Text="{Binding PrivacyHistoryControlsText}" TextWrapping="Wrap" />
+          </StackPanel>
+
+          <!-- UPDATES: consent + truthful verification state. -->
+          <StackPanel Spacing="8" IsVisible="{Binding IsUpdatesSelected}">
+            <TextBlock Text="{Binding UpdatesHeadingText}"
+                       FontSize="18"
+                       FontWeight="SemiBold" />
+            <TextBlock Text="{Binding IndicatorUpdatesText}" TextWrapping="Wrap" />
+            <!-- Grid, not a horizontal StackPanel: a StackPanel gives the text infinite width, so it
+                 never wraps and the hy/ru reason was clipped at 200% text scale. -->
+            <Grid ColumnDefinitions="Auto,*" ColumnSpacing="8">
+              <Button Grid.Column="0"
+                      VerticalAlignment="Top"
+                      Content="{Binding VerifyBuildButtonText}"
+                      IsEnabled="{Binding IsBuildVerificationAvailable}"
+                      MinWidth="170" />
+              <TextBlock Grid.Column="1"
+                         VerticalAlignment="Center"
+                         Text="{Binding VerifyBuildUnavailableText}"
+                         TextWrapping="Wrap" />
+            </Grid>
+
+            <Grid ColumnDefinitions="240,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto" Margin="0,6,0,0">
+              <TextBlock Grid.Row="0" Grid.Column="0" Text="{Binding SupportRuntimeVersionLabelText}" FontWeight="SemiBold" TextWrapping="Wrap" />
+              <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding RuntimeVersionText}" />
+
+              <TextBlock Grid.Row="1" Grid.Column="0" Text="{Binding SupportReleaseChannelLabelText}" FontWeight="SemiBold" TextWrapping="Wrap" />
+              <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding ReleaseChannelText}" />
+
+              <TextBlock Grid.Row="2" Grid.Column="0" Text="{Binding SupportBuildHashLabelText}" FontWeight="SemiBold" TextWrapping="Wrap" />
+              <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding BuildHashText}" TextWrapping="Wrap" />
+
+              <TextBlock Grid.Row="3" Grid.Column="0" Text="{Binding SupportPublisherLabelText}" FontWeight="SemiBold" TextWrapping="Wrap" />
+              <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding PublisherStatusText}" TextWrapping="Wrap" />
+
+              <TextBlock Grid.Row="4" Grid.Column="0" Text="{Binding SupportSha256LabelText}" FontWeight="SemiBold" />
+              <TextBlock Grid.Row="4" Grid.Column="1" Text="{Binding Sha256Text}" TextWrapping="Wrap" />
+            </Grid>
+          </StackPanel>
+
+          <!-- CONSEQUENTIAL-ACTION CONFIRMATION (spec 3.12, D-v3.5-254). -->
+          <Border IsVisible="{Binding IsConsequentialConfirmationPending}"
+                  Classes="notice">
+            <StackPanel Spacing="8">
+              <TextBlock Text="{Binding ConfirmationMessage}" TextWrapping="Wrap" />
+              <StackPanel Orientation="Horizontal" Spacing="8">
+                <Button Content="{Binding ConfirmButtonText}"
+                        Command="{Binding ConfirmConsequentialActionCommand}" />
+                <Button Content="{Binding CancelButtonText}"
+                        Command="{Binding CancelConsequentialActionCommand}" />
+              </StackPanel>
+            </StackPanel>
+          </Border>
+
+          <!-- Outcome of the last confirmed action. This build has no launcher or export writer
+               for them, so the text says so; it stays outside the confirmation border, which
+               closes as soon as the user confirms. -->
+          <TextBlock x:Name="ConsequentialActionResult"
+                     Text="{Binding ConsequentialActionResultText}"
+                     TextWrapping="Wrap"
+                     FontSize="12"
+                     Classes="muted"
+                     AutomationProperties.LiveSetting="Polite"
+                     IsVisible="{Binding ConsequentialActionResultText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+        </StackPanel>
+      </ScrollViewer>
+    </Border>
+  </Grid>
+</Window>
