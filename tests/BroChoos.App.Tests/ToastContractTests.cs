@@ -68,9 +68,11 @@ public sealed class ToastContractTests
 	public async Task CleanupRecoveryToast_ShownOnCancelToClipboard_IsInteractive()
 	{
 		bool cleanupToastShown = false;
-		bool cleanupToastClosed = false;
 		bool? isInteractive = null;
 		string? written = null;
+		System.Diagnostics.Stopwatch sinceShown = new();
+		TimeSpan closedAfter = TimeSpan.Zero;
+		TaskCompletionSource closedSignal = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
 		PickerSession session = NewSession();
 
@@ -84,8 +86,15 @@ public sealed class ToastContractTests
 			{
 				cleanupToastShown = true;
 				isInteractive = interactive;
+				// Started here, BEFORE the product starts its lifetime wait, so the measured time
+				// can only be longer than the product's own wait, never shorter.
+				sinceShown.Start();
 			},
-			onCleanupToastClosed: () => cleanupToastClosed = true);
+			onCleanupToastClosed: () =>
+			{
+				closedAfter = sinceShown.Elapsed;
+				_ = closedSignal.TrySetResult();
+			});
 
 		_ = await session.ShowForTestsAsync([new PickerKeyAction(PickerKey.Escape, 0)]);
 
@@ -93,9 +102,18 @@ public sealed class ToastContractTests
 		_ = isInteractive.Should().BeTrue("cleanup recovery toast should be interactive");
 		_ = written.Should().Be("https://example.com/");
 
-		await Task.Delay(TimeSpan.FromSeconds(8).Add(TimeSpan.FromMilliseconds(100)));
+		// CI run 41051054418 (test-debug, attempt 2) failed here when this was a fixed 8.1 s sleep:
+		// the product's 8 s Task.Delay continuation runs on the thread pool, and on a loaded runner
+		// it was more than 100 ms late. The test now waits for the close itself, bounded by a hang
+		// guard far above the lifetime, and checks the lifetime separately: the close must not come
+		// BEFORE 8 s. The 50 ms slack only absorbs timer-tick rounding between the product's timer
+		// and this Stopwatch; it cannot hide a shorter lifetime.
+		Task winner = await Task.WhenAny(closedSignal.Task, Task.Delay(TimeSpan.FromSeconds(60)));
 
-		_ = cleanupToastClosed.Should().BeTrue("cleanup recovery toast should auto-close after 8s lifetime");
+		_ = ReferenceEquals(winner, closedSignal.Task).Should().BeTrue("cleanup recovery toast should auto-close after 8s lifetime");
+		_ = closedAfter.Should().BeGreaterThanOrEqualTo(
+			CleanupRecoveryToastWindow.Lifetime - TimeSpan.FromMilliseconds(50),
+			"the cleanup recovery toast must stay up for its whole 8 s lifetime before it auto-closes");
 	}
 
 	[Fact]

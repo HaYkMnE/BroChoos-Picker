@@ -1,4 +1,6 @@
 using System.Collections.Concurrent;
+using System.Runtime.InteropServices;
+using System.Security.Principal;
 using BroChoos.App.Picker;
 using BroChoos.Core.Abstractions;
 using BroChoos.Core.Ingress;
@@ -30,6 +32,19 @@ public sealed class ForwardedUrlRouterTests
 {
 	private const string ForwardedUrl = "https://forwarded.example/path";
 	private const string RedactedEcho = "[primary received] forwarded activation buffered";
+	private const string ListeningBecause = "the primary's pipe server must have a listening instance before a secondary forwards; the bound is a hang guard only";
+
+	// THE "PRIMARY IS LISTENING" SIGNAL (CI run 41051054418, Debug and Release: the FIRST forward
+	// of SessionActivatedAfterTwoForwards reported Failed). AcquireOrForwardAsync returns Primary
+	// as soon as it owns the mutex; the pipe server is started on the thread pool and creates its
+	// first pipe instance LATER. The secondary's connect budget is 2 s (ConnectTimeoutMs) and the
+	// clock of ConnectAsync starts before its own pool work item runs, so on a loaded runner the
+	// budget could run out before any instance existed. A real secondary is a separate process
+	// that starts long after the primary; these tests forward microseconds later. So every forward
+	// first waits, bounded, until the kernel reports a listening instance of the guard's pipe. The
+	// same wait covers a SECOND forward: the server re-creates its instance only after it has
+	// finished with the previous connection.
+	private static readonly TimeSpan ListeningGuard = TimeSpan.FromSeconds(30);
 
 	// A1 pin: a sessionless primary (the --no-ui case: Program always attaches the
 	// router, and no session ever activates on that path) surfaces the forward
@@ -124,6 +139,8 @@ public sealed class ForwardedUrlRouterTests
 	// on this thread is safe.
 	private static SingleInstanceRole ForwardAsSeparateProcessWould(string url)
 	{
+		_ = PipeIsListening(ListeningGuard).Should().BeTrue(ListeningBecause);
+
 		using WindowsSingleInstanceGuard secondary = NewGuard();
 		SingleInstanceRole role = SingleInstanceRole.Failed;
 
@@ -137,6 +154,33 @@ public sealed class ForwardedUrlRouterTests
 		_ = forwarder.Join(TimeSpan.FromSeconds(30)).Should().BeTrue("the forward has its own 2 s pipe timeout; 30 s is generous");
 		return role;
 	}
+
+	// WaitNamedPipe answers "is an instance of this pipe waiting for a client?" without connecting,
+	// so it consumes nothing. While no instance exists it returns false at once (file not found),
+	// hence the short pause between probes. The pipe name must stay identical to the guard's.
+	private static bool PipeIsListening(TimeSpan timeout)
+	{
+		string sid = WindowsIdentity.GetCurrent().User?.Value ?? "anon";
+		string pipePath = $@"\\.\pipe\BroChoos.Pipe.{sid}";
+		long deadline = Environment.TickCount64 + (long)timeout.TotalMilliseconds;
+
+		while (!WaitNamedPipe(pipePath, 100))
+		{
+			if (Environment.TickCount64 >= deadline)
+			{
+				return false;
+			}
+
+			Thread.Sleep(10);
+		}
+
+		return true;
+	}
+
+	[DllImport("kernel32.dll", EntryPoint = "WaitNamedPipeW", SetLastError = true, CharSet = CharSet.Unicode)]
+	[DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+	[return: MarshalAs(UnmanagedType.Bool)]
+	private static extern bool WaitNamedPipe(string name, uint timeout);
 
 	private static StringWriter CaptureConsole(out TextWriter original)
 	{

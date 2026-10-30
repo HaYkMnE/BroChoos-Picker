@@ -79,24 +79,36 @@ public sealed class EventCheckpointObserverTests
 
 		Task park = Task.Run(() => observer.OnStage(AtomicWriteStage.BeforePublish));
 
-		// The signal must arrive while the call is STILL INSIDE OnStage: the harness asserts
-		// against the destination at this instant, so "reached" has to mean "parked here now".
-		_ = reached.WaitOne(HangGuard).Should().BeTrue("an armed stage must signal reached");
+		try
+		{
+			// The signal must arrive while the call is STILL INSIDE OnStage: the harness asserts
+			// against the destination at this instant, so "reached" has to mean "parked here now".
+			// The kernel wait runs on a pool thread and is awaited, so the test thread is never
+			// blocked (the rule in the class header); HangGuard only turns a hang into a failure.
+			_ = (await Task.Run(() => reached.WaitOne(HangGuard))).Should().BeTrue("an armed stage must signal reached");
 
-		// "Still parked" is decided by the observer's state, not by a race: proceed is not set and
-		// the park cap is far out of reach, so the only way OnStage can have returned is a defect.
-		// The 200 ms window is a bounded wait that is EXPECTED to time out; it gives a broken
-		// observer a chance to return early, and a slow scheduler can only lengthen it.
-		_ = park.IsCompleted.Should().BeFalse("the observer must still be parked, not returned");
-		_ = (await CompletedWithin(park, TimeSpan.FromMilliseconds(200)))
-			.Should().BeFalse("the observer must still be parked, not returned");
-		_ = observer.ExpiredStages.Should().BeEmpty("a park that is still waiting has not expired");
+			// "Still parked" is decided by the observer's state, not by a race: proceed is not set and
+			// the park cap is far out of reach, so the only way OnStage can have returned is a defect.
+			// IsCompleted is only a fast first check: it catches an observer that had ALREADY returned.
+			// The 200 ms negative wait is what detects an early return: it is EXPECTED to time out and
+			// gives a broken observer the time to return early, and a slow scheduler can only lengthen it.
+			_ = park.IsCompleted.Should().BeFalse("the observer must still be parked, not returned");
+			_ = (await CompletedWithin(park, TimeSpan.FromMilliseconds(200)))
+				.Should().BeFalse("the observer must still be parked, not returned");
+			_ = observer.ExpiredStages.Should().BeEmpty("a park that is still waiting has not expired");
 
-		_ = proceed.Set();
+			_ = proceed.Set();
 
-		_ = (await CompletedWithin(park, HangGuard)).Should().BeTrue("setting proceed must release the park");
-		_ = expired.Should().BeEmpty("a released park is not an expired one");
-		_ = observer.ExpiredStages.Should().BeEmpty();
+			_ = (await CompletedWithin(park, HangGuard)).Should().BeTrue("setting proceed must release the park");
+			_ = expired.Should().BeEmpty("a released park is not an expired one");
+			_ = observer.ExpiredStages.Should().BeEmpty();
+		}
+		finally
+		{
+			// A failed assertion above must not leave OnStage parked on a pool thread for the
+			// 10-minute ReleasablePark. Setting an already-set manual-reset event is harmless.
+			_ = proceed.Set();
+		}
 	}
 
 	[Fact]
@@ -160,7 +172,17 @@ public sealed class EventCheckpointObserverTests
 			ExpiringPark,
 			expired.Add);
 
-		Task park = Task.Run(() => observer.OnStage(AtomicWriteStage.LockAcquired));
+		// The Stopwatch wraps ONLY the OnStage call, inside the task, so thread-pool start-up delay
+		// is not charged to it. A regression that ignored the configured 250 ms timeout (for example
+		// a fallback to a long default) would still complete within HangGuard, so this is the
+		// assertion that catches it.
+		TimeSpan onStageElapsed = TimeSpan.Zero;
+		Task park = Task.Run(() =>
+		{
+			System.Diagnostics.Stopwatch call = System.Diagnostics.Stopwatch.StartNew();
+			observer.OnStage(AtomicWriteStage.LockAcquired);
+			onStageElapsed = call.Elapsed;
+		});
 
 		// The whole point: nobody ever sets proceed. The observer must free itself on its own
 		// timeout - from LockAcquired onward the park is inside the per-file write mutex, so an
@@ -171,6 +193,9 @@ public sealed class EventCheckpointObserverTests
 		_ = (await CompletedWithin(park, HangGuard))
 			.Should().BeTrue("the park must be bounded and expire on its own");
 
+		_ = onStageElapsed.Should().BeLessThan(
+			ExpiringPark + TimeSpan.FromSeconds(30),
+			"the park must expire on the CONFIGURED timeout, not on some longer bound");
 		_ = expired.Should().ContainSingle().Which.Should().Be(AtomicWriteStage.LockAcquired);
 		_ = observer.ExpiredStages.Should().ContainSingle().Which.Should().Be(AtomicWriteStage.LockAcquired);
 	}
@@ -199,12 +224,23 @@ public sealed class EventCheckpointObserverTests
 		// Nobody sets proceed, so the park expires and the throwing callback runs. Wrapped in a
 		// Task so the assertion is about the exception ESCAPING OnStage, not about this test
 		// thread: an escape would surface as a faulted task here.
-		Task park = Task.Run(() => observer.OnStage(AtomicWriteStage.AfterPublish));
+		// Same in-task Stopwatch around OnStage alone as in the test above. It is read only when
+		// the task did not fault, so an escaping exception is still reported by IsFaulted.
+		TimeSpan onStageElapsed = TimeSpan.Zero;
+		Task park = Task.Run(() =>
+		{
+			System.Diagnostics.Stopwatch call = System.Diagnostics.Stopwatch.StartNew();
+			observer.OnStage(AtomicWriteStage.AfterPublish);
+			onStageElapsed = call.Elapsed;
+		});
 
 		Task winner = await Task.WhenAny(park, Task.Delay(HangGuard));
 
 		_ = ReferenceEquals(winner, park).Should().BeTrue("the park must still expire and return, even when the callback throws");
 		_ = park.IsFaulted.Should().BeFalse("a throwing park-expiry callback must NOT escape OnStage - the write path has no try/catch around it");
+		_ = onStageElapsed.Should().BeLessThan(
+			ExpiringPark + TimeSpan.FromSeconds(30),
+			"the park must expire on the CONFIGURED timeout, not on some longer bound");
 
 		// The fault is contained, NOT hidden: the expiry is still recorded, and the containment
 		// is announced through the marker sink so a harness fault stays diagnosable.

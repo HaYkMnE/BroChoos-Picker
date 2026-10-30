@@ -448,14 +448,20 @@ public sealed class HelperTimeoutKillTests
 
 	// The kill is proven through the runner's own kill observer, which fires only right before
 	// Process.Kill on a child that has not exited. A non-zero pid means the runner attempted the
-	// kill on a live child; it must be THIS stub's pid when the stub's pid was observed.
+	// kill on a live child, and it must be THIS stub's pid.
+	//
+	// ObservedPid is read while the stub is provably alive and gated (started.txt exists and only
+	// release.txt, which no test has written yet, lets it finish), and its image name is unique to
+	// this test, so exactly one process matches. A 0 therefore means the stub never started or the
+	// lookup saw zero or several matches; either way the comparison below could not be made, and
+	// skipping it would let a kill of the wrong process pass. It fails instead.
 	private static void AssertTheRunnerKilledTheStub(StubHelper stub, int killedPid)
 	{
 		_ = killedPid.Should().NotBe(0, "the runner must have attempted the kill on the live child it abandoned; a child that merely exited on its own would leave this 0");
-		if (stub.ObservedPid != 0)
-		{
-			_ = killedPid.Should().Be(stub.ObservedPid, "the runner must kill this test's stub and no other process");
-		}
+		_ = stub.ObservedPid.Should().NotBe(
+			0,
+			"the stub's pid must have been observed while it was alive and gated, otherwise the test cannot prove the runner killed THIS stub and no other process");
+		_ = killedPid.Should().Be(stub.ObservedPid, "the runner must kill this test's stub and no other process");
 	}
 
 	private static string CommandInterpreter()
@@ -566,12 +572,13 @@ public sealed class HelperTimeoutKillTests
 		// covers more than two polls. It only delays the check; it is not raced against the kill.
 		private static readonly TimeSpan ReleasedChildReactionBound = TimeSpan.FromMilliseconds(2500);
 
-		private StubHelper(string directoryPath, string executablePath, string processName, string command)
+		private StubHelper(string directoryPath, string executablePath, string processName, string command, DateTime createdAt)
 		{
 			DirectoryPath = directoryPath;
 			ExecutablePath = executablePath;
 			ProcessName = processName;
 			Command = command;
+			CreatedAt = createdAt;
 		}
 
 		public string DirectoryPath { get; }
@@ -581,6 +588,10 @@ public sealed class HelperTimeoutKillTests
 		public string ProcessName { get; }
 
 		public string Command { get; }
+
+		// Local time (the clock Process.StartTime reports in), taken before the image exists, so
+		// every process started from this stub's image has a StartTime at or after it.
+		public DateTime CreatedAt { get; }
 
 		// The pid of this stub's child, read when started.txt was first observed (0 if never).
 		public int ObservedPid { get; private set; }
@@ -592,6 +603,7 @@ public sealed class HelperTimeoutKillTests
 		public static StubHelper Create(string commandInterpreter)
 		{
 			// Under the test process's temp directory, never the repository (P8).
+			DateTime createdAt = DateTime.Now;
 			string directoryPath = Path.Combine(Path.GetTempPath(), "brochoos-helper-orphan-" + Guid.NewGuid().ToString("N")[..12]);
 			_ = Directory.CreateDirectory(directoryPath);
 
@@ -628,11 +640,13 @@ public sealed class HelperTimeoutKillTests
 
 			// ONE argument (ArgumentList), exactly as the runners do it. It has no space, so
 			// ArgumentList passes it unquoted and cmd sees no quote at all (cmd accepts the
-			// command directly after /c). The script name resolves against the runner's
-			// WorkingDirectory, which is the stub's own directory.
-			string command = $"/c{ScriptFileName}";
+			// command directly after /c). The script resolves against the runner's
+			// WorkingDirectory, which is the stub's own directory. The explicit `.\` makes that a
+			// relative PATH rather than a bare name, so cmd never searches the current directory
+			// implicitly and the stub still runs when NoDefaultCurrentDirectoryInExePath is set.
+			string command = $"/c.\\{ScriptFileName}";
 
-			return new StubHelper(directoryPath, executablePath, processName, command);
+			return new StubHelper(directoryPath, executablePath, processName, command, createdAt);
 		}
 
 		// Waits for started.txt, bounded at 10 s, and records the child's pid. Used as the
@@ -721,6 +735,13 @@ public sealed class HelperTimeoutKillTests
 		// reaped here by its unique image name, so it does not live out its 30 s cap; then the
 		// temp directory goes. A killed child's image can be briefly locked, so a failed delete
 		// is tolerated: it must not fail a test that has already proved its point.
+		//
+		// PID REUSE. GetProcessesByName returns pids, and Kill opens a pid again later. A process
+		// is only acted on when its StartTime is at or after CreatedAt: a process that reused the
+		// pid of an exited stub would also need this test's unique image name, and any process
+		// older than the stub cannot be one of its children. StartTime and Kill each open the pid
+		// separately, so a pid freed and reused in the microseconds between them is not excluded;
+		// that window is the residual, and it needs a new process to win the same pid in it.
 		public void Dispose()
 		{
 			try
@@ -729,11 +750,16 @@ public sealed class HelperTimeoutKillTests
 				{
 					try
 					{
-						process.Kill(entireProcessTree: true);
-						_ = process.WaitForExit(5000);
+						if (process.StartTime >= CreatedAt)
+						{
+							process.Kill(entireProcessTree: true);
+							_ = process.WaitForExit(5000);
+						}
 					}
-					catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception or NotSupportedException)
+					catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception or NotSupportedException or AggregateException)
 					{
+						// AggregateException: Kill(entireProcessTree: true) reports failures to end
+						// individual descendants (for example a ping that already exited) this way.
 					}
 					finally
 					{
