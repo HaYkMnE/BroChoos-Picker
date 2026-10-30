@@ -810,9 +810,9 @@ internal static class ConsoleCaptureTestBound
 		}
 
 		// N-1: how long the case has held the gate in its current acquisition (zero when not
-		// holding), together with the acquisition it belongs to. The hold time and the acquisition it belongs to, read in ONE critical section, so
-		// the runner's "held too long" decision and the epoch it poisons with always describe the
-		// same acquisition (a release plus a new row in between cannot mix them).
+		// holding), together with the acquisition it belongs to, both read in ONE critical
+		// section, so the runner's "held too long" decision and the epoch it poisons with always
+		// describe the same acquisition (a release plus a new row in between cannot mix them).
 		internal (TimeSpan HeldFor, string? Name, long Epoch) Snapshot()
 		{
 			lock (_gate)

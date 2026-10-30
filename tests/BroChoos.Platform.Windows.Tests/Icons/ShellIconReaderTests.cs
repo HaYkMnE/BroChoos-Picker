@@ -196,6 +196,7 @@ public sealed class ShellIconReaderTests(ITestOutputHelper output)
 		};
 
 		bool holderStarted = false;
+		bool bodySucceeded = false;
 		try
 		{
 			System.Diagnostics.Stopwatch sinceSecondEnqueued = System.Diagnostics.Stopwatch.StartNew();
@@ -216,6 +217,7 @@ public sealed class ShellIconReaderTests(ITestOutputHelper output)
 			// Guards against a vacuous pass: the second request really did take longer than one
 			// budget from its enqueue, so a budget counted from the enqueue would have failed it.
 			_ = secondTotal.Should().BeGreaterThan(budget, "the second request waited a full hold in the queue and then ran for another, ~1.4 budgets in all");
+			bodySucceeded = true;
 		}
 		finally
 		{
@@ -223,7 +225,18 @@ public sealed class ShellIconReaderTests(ITestOutputHelper output)
 			await stop.CancelAsync();
 			if (holderStarted)
 			{
-				_ = holder.Join(TimeSpan.FromSeconds(10));
+				// A releaser that outlives the bounded join is recorded. After a failed body only a
+				// diagnostic line is written, so the finally never replaces the original failure;
+				// after a passing body the join is asserted.
+				bool joined = holder.Join(TimeSpan.FromSeconds(10));
+				if (!bodySucceeded && !joined)
+				{
+					_output.WriteLine("HOLD_RELEASER_JOIN_TIMEOUT the releaser thread was still alive 10 s after stop was cancelled; the test body had already failed.");
+				}
+				else if (bodySucceeded)
+				{
+					_ = joined.Should().BeTrue("the releaser thread must end within 10 s once stop is cancelled");
+				}
 			}
 		}
 	}

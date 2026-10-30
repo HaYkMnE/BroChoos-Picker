@@ -82,9 +82,12 @@ internal static class CultureGate
 // before Gate.Release. So while Holder is null at epoch e the gate is free, or its holder is
 // between those two release calls, or the next acquirer is between Gate.Wait and Take, and in
 // every case the next acquisition is e + 1. Epoch e + 1 therefore held the gate for the whole wait
-// apart from those few instructions, and a waiter that lost the race to a holder that hangs names
-// it at once instead of leaving the poison to the next waiter, a further CultureGate.Timeout
-// (10 minutes) later. Epoch e + 2 or later means the gate changed hands during the wait: refused.
+// apart from a window of a few instructions in program order (in wall time that window also
+// includes any OS scheduling delay of the thread running them), and a waiter that lost the race
+// to a holder that hangs names it at once instead of leaving the poison to the next waiter, a
+// further CultureGate.Timeout (10 minutes) later. Epoch e + 2 or later means the gate changed
+// hands during the wait: refused. CultureGateInvariantTests pins the acquisition and release
+// paths this rests on.
 internal sealed class CultureGateState
 {
 	private readonly Lock _lock = new();
@@ -405,6 +408,25 @@ public sealed class CultureGateStateTests
 		_ = state.TryPoisonAfterWait(start, out string? heldBy).Should().BeFalse();
 		_ = heldBy.Should().BeNull();
 		_ = state.PoisonedBy.Should().BeNull();
+	}
+
+	// The e + 1 allowance names only a HOLDER: e + 1 took the gate and released it again during
+	// the wait, so at timeout the gate is free and nobody may be poisoned.
+	[Fact]
+	public void WaitStartedWithNoHolder_NextAcquisitionTookAndReleased_FreeAtTimeout_IsRefused()
+	{
+		CultureGateState state = new();
+		CultureGateState.WaitStart start = state.BeginWait();
+		_ = start.Should().Be(new CultureGateState.WaitStart(0, HolderWasNull: true));
+
+		_ = state.Take("Tests.Passing").Should().Be(start.Epoch + 1);
+		state.Release();
+
+		_ = state.TryPoisonAfterWait(start, out string? heldBy).Should().BeFalse("the gate is free at timeout, so there is no holder to name");
+		_ = heldBy.Should().BeNull();
+		_ = state.PoisonedBy.Should().BeNull();
+		_ = state.IsPoisonedAndStillHeld(out string? poisonedBy).Should().BeFalse();
+		_ = poisonedBy.Should().BeNull();
 	}
 
 	// N-2: the invariant "PoisonedBy is non-null only while Holder equals it" survives a release.
