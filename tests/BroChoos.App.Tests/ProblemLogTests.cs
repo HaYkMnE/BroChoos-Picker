@@ -173,7 +173,12 @@ public sealed partial class ProblemLogTests : IDisposable
 
 		ProblemLogWriter writer = new(new ProblemLogOptions(_logPath) { Clock = () => now });
 		_ = writer.Write(new ProblemLogEntry(LogLevel.Warning, "test", "new-line", null, []));
-		_ = writer.Flush(TimeSpan.FromSeconds(5));
+
+		// The drain runs on a pool task. On a loaded CI runner (the Debug job, whole solution in
+		// parallel) it did not finish inside the old 5 s wait, whose result was discarded, so the
+		// file was read before the prune ran. This wait is the test's own, not a product budget:
+		// it is generous, and the drain must be confirmed complete before the file is read.
+		_ = writer.Flush(TimeSpan.FromSeconds(30)).Should().BeTrue("the startup prune and the append must have been written before the file is read");
 
 		_ = File.ReadAllLines(_logPath).Select(l => ReadString(l, "event")).Should().Equal("recent-current", "new-line");
 		_ = File.ReadAllLines(rotated).Select(l => ReadString(l, "event")).Should().Equal("recent-rotated");
