@@ -2196,7 +2196,7 @@ internal sealed class PickerSession(
 				PendingCleanupAuditForTests = Task.Factory.StartNew(
 					() => WriteCleanupAuditFailOpen(cleanupEvent),
 					CancellationToken.None,
-					TaskCreationOptions.LongRunning,
+					TaskCreationOptions.LongRunning | TaskCreationOptions.DenyChildAttach,
 					TaskScheduler.Default);
 			}
 			else

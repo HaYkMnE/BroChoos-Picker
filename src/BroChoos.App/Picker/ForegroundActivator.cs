@@ -51,7 +51,7 @@ internal static class ForegroundActivator
 		Task<Outcome> ladder = Task.Factory.StartNew(
 			() => RunLadder(hwnd, uiThreadId),
 			CancellationToken.None,
-			TaskCreationOptions.LongRunning,
+			TaskCreationOptions.LongRunning | TaskCreationOptions.DenyChildAttach,
 			TaskScheduler.Default);
 
 		try

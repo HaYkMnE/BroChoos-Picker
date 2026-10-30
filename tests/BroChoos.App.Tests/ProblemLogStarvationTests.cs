@@ -48,10 +48,21 @@ public sealed class ProblemLogStarvationTests : IDisposable
 	{
 		ProblemLogWriter writer = new(new ProblemLogOptions(_logPath)) { BeforeAppend = static () => Thread.Sleep(300) };
 		ThreadPool.GetMinThreads(out int minWorkers, out int minIo);
-		using ManualResetEventSlim release = new(false);
-		using ManualResetEventSlim probe = new(false);
+
+		// Disposed by hand in the finally, and ONLY once every queued work item is known to have
+		// finished with them: a blocked item still touches `release` and `exited`, and the probe
+		// item touches `probe`, so disposing them under a still-running item would race it.
+		ManualResetEventSlim release = new(false);
+		ManualResetEventSlim probe = new(false);
 		int blockers = ThreadPool.ThreadCount + 256;
-		using CountdownEvent exited = new(blockers);
+		CountdownEvent exited = new(blockers);
+		bool blockersExited = false;
+		bool probeRan = false;
+
+		// How many blockers, and whether the probe, were ACTUALLY queued. If queuing throws
+		// midway, the finally waits only for those instead of for items that never existed.
+		int queued = 0;
+		bool probeQueued = false;
 		try
 		{
 			// Min threads at the floor (the processor count), then more blocking work items than
@@ -67,10 +78,12 @@ public sealed class ProblemLogStarvationTests : IDisposable
 					},
 					(Release: release, Exited: exited),
 					preferLocal: false);
+				queued++;
 			}
 
 			// The starvation is real: a work item queued behind the blockers does not run.
 			_ = ThreadPool.UnsafeQueueUserWorkItem(static done => done.Set(), probe, preferLocal: false);
+			probeQueued = true;
 			_ = probe.Wait(TimeSpan.FromMilliseconds(300)).Should().BeFalse("the thread pool must be starved for this test to mean anything");
 
 			System.Diagnostics.Stopwatch watch = System.Diagnostics.Stopwatch.StartNew();
@@ -87,10 +100,25 @@ public sealed class ProblemLogStarvationTests : IDisposable
 			// Every queued item must have run before the events are disposed.
 			release.Set();
 			_ = ThreadPool.SetMinThreads(minWorkers, minIo);
-			_ = exited.Wait(TimeSpan.FromSeconds(60));
-			_ = probe.Wait(TimeSpan.FromSeconds(60));
+			if (queued < blockers)
+			{
+				// Count off the blockers that were never queued, so the wait covers only real ones.
+				_ = exited.Signal(blockers - queued);
+			}
+
+			blockersExited = exited.Wait(TimeSpan.FromSeconds(60));
+			probeRan = !probeQueued || probe.Wait(TimeSpan.FromSeconds(60));
+			if (blockersExited && probeRan)
+			{
+				release.Dispose();
+				probe.Dispose();
+				exited.Dispose();
+			}
 		}
 
+		// Asserted after the finally, so a failure inside the try is not masked by these.
+		_ = blockersExited.Should().BeTrue("every blocking work item must finish once released, or the pool was left starved for the next test");
+		_ = probeRan.Should().BeTrue("the probe work item must run once the pool recovers");
 		_ = File.ReadAllLines(_logPath).Should().HaveCount(2).And.Contain(l => l.Contains("\"event\":\"first\"", StringComparison.Ordinal)).And.Contain(l => l.Contains("\"event\":\"second\"", StringComparison.Ordinal));
 	}
 }

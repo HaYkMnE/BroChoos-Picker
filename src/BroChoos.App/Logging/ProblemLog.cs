@@ -105,9 +105,32 @@ internal sealed class ProblemLogWriter
 	// Test seam: runs on the drain thread before each line is appended (a "slow disk").
 	internal Action? BeforeAppend { get; init; }
 
+	// Test seam: starts the drain thread for the given loop. A test can make it throw to exercise
+	// the failed-thread-start path. The product always uses StartBackgroundDrainThread.
+	internal Action<ThreadStart> DrainThreadStarter { get; init; } = StartBackgroundDrainThread;
+
+	// Test seam: whether a drain is marked as running (read under _queueGate).
+	internal bool IsDrainingForTests
+	{
+		get
+		{
+			lock (_queueGate)
+			{
+				return _draining;
+			}
+		}
+	}
+
 	// Never touches the disk and never blocks on it: the line is queued with its timestamp and
 	// the drain thread is started if none is running. When the queue is full the OLDEST line is
-	// dropped and counted. Returns false only if even queuing failed.
+	// dropped and counted.
+	//
+	// Returns true when the line is queued and a drain is running or was started for it. Returns
+	// false in two cases: queuing itself failed (the line is lost), or the line WAS queued but the
+	// drain thread could not be started. In the second case the line stays queued and is written
+	// by the next drain, which the next Write or Flush starts, so false means "not promised", not
+	// "lost". A failed thread start never throws out of here; an OutOfMemoryException while
+	// queuing (allocating the line or growing the queue) is not swallowed and does escape.
 	public bool Write(ProblemLogEntry entry)
 	{
 		try
@@ -131,12 +154,9 @@ internal sealed class ProblemLogWriter
 				}
 			}
 
-			if (start)
-			{
-				StartDrainThread();
-			}
-
-			return true;
+			// A drain that could not be started is reported as false instead of escaping: the line
+			// stays queued for the next Write or Flush, but this call cannot promise it is written.
+			return !start || TryStartDrainThread();
 		}
 		catch (Exception ex) when (ex is not OutOfMemoryException)
 		{
@@ -160,6 +180,11 @@ internal sealed class ProblemLogWriter
 
 	// Waits up to the timeout for the queue to be written. With AutoDrain off (tests) it drains
 	// on the caller. Returns true when nothing is left queued.
+	//
+	// Lines can be queued with NO drain running: a Write whose drain thread failed to start left
+	// them there. Flush then starts the drain itself instead of waiting out its whole timeout for
+	// a drain nobody started, so the shutdown flush (ProcessExit, provider Dispose) still writes
+	// them. If that start fails too, Flush returns false at once.
 	public bool Flush(TimeSpan timeout)
 	{
 		try
@@ -170,20 +195,35 @@ internal sealed class ProblemLogWriter
 			}
 
 			long deadline = Environment.TickCount64 + (long)timeout.TotalMilliseconds;
-			lock (_queueGate)
+			while (true)
 			{
-				while (_draining || _queue.Count > 0)
+				lock (_queueGate)
 				{
-					long remaining = deadline - Environment.TickCount64;
-					if (remaining <= 0)
+					if (!_draining && _queue.Count == 0)
 					{
-						return false;
+						return true;
 					}
 
-					_ = Monitor.Wait(_queueGate, (int)Math.Min(remaining, int.MaxValue));
+					if (_draining)
+					{
+						long remaining = deadline - Environment.TickCount64;
+						if (remaining <= 0)
+						{
+							return false;
+						}
+
+						_ = Monitor.Wait(_queueGate, (int)Math.Min(remaining, int.MaxValue));
+						continue;
+					}
+
+					// Queued lines and no drain: claim the drain under the lock, start it outside.
+					_draining = true;
 				}
 
-				return true;
+				if (!TryStartDrainThread())
+				{
+					return false;
+				}
 			}
 		}
 		catch (Exception ex) when (ex is not OutOfMemoryException)
@@ -252,24 +292,38 @@ internal sealed class ProblemLogWriter
 	// seconds late, so Flush(5 s) timed out with 600 ms of work not yet begun (CI run
 	// 41027998726; ProblemLogStarvationTests). The thread lives for one burst: DrainLoop exits
 	// when it finds the queue empty under _queueGate, and the next Write, which checks _draining
-	// under the same lock, starts a new one, so no line is left without a drain. IsBackground:
+	// under the same lock, starts a new one; if starting it fails, the next Write or Flush
+	// starts it, so no line is left without a drain once either is called again. IsBackground:
 	// process exit never waits for it (ProcessExit gives it the bounded ShutdownDrainTimeout).
-	private void StartDrainThread()
+	//
+	// EVERY exception is caught here, OutOfMemoryException included: when the OS cannot create
+	// the thread, Thread.Start throws OutOfMemoryException, and letting it escape would leave
+	// _draining stuck at true (no later Write would ever start a drain) and throw out of Write.
+	// No thread was created, so nothing else can be half-done and the flag must be cleared.
+	private bool TryStartDrainThread()
 	{
 		try
 		{
-			new Thread(DrainLoop) { IsBackground = true, Name = "BroChoos.ProblemLog.Drain" }.Start();
+			DrainThreadStarter(DrainLoop);
+			return true;
 		}
-		catch (Exception ex) when (ex is not OutOfMemoryException)
+		catch (Exception)
 		{
-			// No thread: clear the flag so the next Write tries again. The lines stay queued, so
-			// Flush still waits for them (bounded) instead of reporting them written.
+			// No thread: clear the flag so the next Write or Flush starts one. The lines stay
+			// queued, so they are not reported written until a drain has run.
 			lock (_queueGate)
 			{
 				_draining = false;
 				Monitor.PulseAll(_queueGate);
 			}
+
+			return false;
 		}
+	}
+
+	private static void StartBackgroundDrainThread(ThreadStart drainLoop)
+	{
+		new Thread(drainLoop) { IsBackground = true, Name = "BroChoos.ProblemLog.Drain" }.Start();
 	}
 
 	private void DrainLoop()

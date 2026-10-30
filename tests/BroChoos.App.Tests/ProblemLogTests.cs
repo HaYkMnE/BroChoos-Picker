@@ -769,6 +769,67 @@ public sealed partial class ProblemLogTests : IDisposable
 		return current?.FullName ?? throw new InvalidOperationException("BroChoos.sln not found above the test output folder.");
 	}
 
+	// THE FAILED-THREAD-START PATH. When the OS cannot create the drain thread, Thread.Start
+	// throws OutOfMemoryException. Write must report false without throwing, clear _draining so
+	// a later call can start a drain, and keep the line queued so it is still written.
+	[Fact]
+	public void Write_WhenTheDrainThreadFailsToStart_ReturnsFalse_AndTheNextWriteDrainsBothLines()
+	{
+		int starts = 0;
+		ProblemLogWriter writer = new(new ProblemLogOptions(_logPath))
+		{
+			DrainThreadStarter = loop =>
+			{
+				// The real failure is OutOfMemoryException from Thread.Start, which CA2201 forbids
+				// throwing from user code. TryStartDrainThread catches EVERY exception type, so any
+				// type exercises the same path.
+				if (Interlocked.Increment(ref starts) == 1)
+				{
+					throw new InvalidOperationException("forced: the drain thread could not be created");
+				}
+
+				new Thread(loop) { IsBackground = true }.Start();
+			},
+		};
+
+		_ = writer.Write(Entry("first")).Should().BeFalse("the line was queued but no drain could be started for it");
+		_ = writer.IsDrainingForTests.Should().BeFalse("a failed start must clear the flag, or no later call would ever start a drain");
+
+		_ = writer.Write(Entry("second")).Should().BeTrue("the next Write starts a drain again");
+		_ = writer.Flush(TimeSpan.FromSeconds(5)).Should().BeTrue();
+
+		_ = starts.Should().Be(2);
+		_ = Events().Should().Equal("first", "second");
+	}
+
+	// The same failure with no later Write: the shutdown Flush must start the pending drain
+	// itself instead of waiting its whole timeout for a drain nobody started.
+	[Fact]
+	public void Flush_AfterAFailedDrainThreadStart_StartsTheDrain_AndWritesTheQueuedLine()
+	{
+		int starts = 0;
+		ProblemLogWriter writer = new(new ProblemLogOptions(_logPath))
+		{
+			DrainThreadStarter = loop =>
+			{
+				if (Interlocked.Increment(ref starts) == 1)
+				{
+					throw new InvalidOperationException("forced: the drain thread could not be created");
+				}
+
+				new Thread(loop) { IsBackground = true }.Start();
+			},
+		};
+
+		_ = writer.Write(Entry("only")).Should().BeFalse();
+		_ = writer.IsDrainingForTests.Should().BeFalse();
+
+		_ = writer.Flush(TimeSpan.FromSeconds(5)).Should().BeTrue("Flush must start the drain that the failed Write left pending");
+
+		_ = starts.Should().Be(2);
+		_ = Events().Should().Equal("only");
+	}
+
 	private static ProblemLogEntry Entry(string eventName)
 	{
 		return new ProblemLogEntry(LogLevel.Warning, "test", eventName, null, []);
