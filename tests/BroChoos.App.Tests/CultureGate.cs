@@ -41,20 +41,61 @@ internal static class CultureGate
 	// later gated test would wait its own full Timeout in turn, and three of them already run past
 	// the test job's 30-minute limit. The first waiter that times out records the holder it saw
 	// here (so does the console-capture per-test bound in AvaloniaUiThread.cs when it fires);
-	// every later waiter throws at once with that name instead of waiting again. It is cleared
-	// only when a later waiter finds the gate free (see CultureIsolatedAttribute.Before).
+	// every later waiter throws at once with that name instead of waiting again.
+	//
+	// ONE LOCK FOR Holder AND PoisonedBy (StateLock). Every write to either happens under it, and
+	// the invariant it keeps is: PoisonedBy is non-null ONLY while Holder equals it. Poisoning
+	// checks the holder in the same critical section (TryPoisonWhileHeldBy), and taking the gate
+	// sets the new holder and CLEARS the poison in one step (TakeGate), whichever path acquired
+	// it. So the poisoned message can never name X while someone else legitimately holds the gate.
+	internal static readonly Lock StateLock = new();
+
 	internal static string? PoisonedBy
 	{
 		get => Volatile.Read(ref field);
-		set => Volatile.Write(ref field, value);
+		private set => Volatile.Write(ref field, value);
 	}
 
-	// The test currently holding the gate, for timeout messages only. The backing store is the
-	// compiler's private field (C# 14 `field`), read and written only through Volatile.
+	// The test currently holding the gate. The backing store is the compiler's private field
+	// (C# 14 `field`), read through Volatile and written only under StateLock.
 	internal static string? Holder
 	{
 		get => Volatile.Read(ref field);
-		set => Volatile.Write(ref field, value);
+		private set => Volatile.Write(ref field, value);
+	}
+
+	// Poisons the gate only if it is still held by `hungHolder` right now, atomically with that
+	// check. Returns whether it is poisoned by `hungHolder` afterwards.
+	internal static bool TryPoisonWhileHeldBy(string hungHolder)
+	{
+		lock (StateLock)
+		{
+			if (!string.Equals(Holder, hungHolder, StringComparison.Ordinal))
+			{
+				return false;
+			}
+
+			PoisonedBy ??= hungHolder;
+			return string.Equals(PoisonedBy, hungHolder, StringComparison.Ordinal);
+		}
+	}
+
+	// Called by the test that has just acquired the gate, on every acquisition path.
+	internal static void SetHolderAndClearPoison(string holder)
+	{
+		lock (StateLock)
+		{
+			Holder = holder;
+			PoisonedBy = null;
+		}
+	}
+
+	internal static void ClearHolder()
+	{
+		lock (StateLock)
+		{
+			Holder = null;
+		}
 	}
 
 	// True only inside a test that took the gate ITSELF. The gate's count alone cannot say
@@ -73,47 +114,59 @@ public sealed class CultureIsolatedAttribute : BeforeAfterTestAttribute
 {
 	public override void Before(MethodInfo methodUnderTest)
 	{
-		if (CultureGate.PoisonedBy is { } poisonedBy)
+		if (CultureGate.PoisonedBy is not null)
 		{
 			// RECOVERY CHECK FIRST. A holder that was only very slow may have released since the
-			// gate was poisoned. Wait(0) takes the gate if it is free right now, and then the
-			// poison is CLEARED and this test continues normally, holding the gate: the reason
-			// for failing fast (a holder that never releases) no longer exists, so failing every
-			// later test would only hide them. A test that hit the original timeout has already
-			// failed and named the slow holder, so the incident stays in the results.
+			// gate was poisoned. Wait(0) takes the gate if it is free right now, and TakeGate then
+			// clears the poison: the reason for failing fast (a holder that never releases) no
+			// longer exists. A test that hit the original timeout has already failed and named
+			// the slow holder, so the incident stays in the results.
 			if (CultureGate.Gate.Wait(0))
 			{
-				CultureGate.PoisonedBy = null;
 				TakeGate(methodUnderTest);
 				return;
 			}
 
-			throw new TimeoutException(
-				$"CultureGate is poisoned: an earlier test already waited {CultureGate.Timeout.TotalMinutes} minutes for it, and it is still held by {poisonedBy}. Failing at once instead of waiting again.");
+			// Fail fast only if the poison is still true at this instant: the gate is still held
+			// by the test it names. If the holder changed (the poison was cleared by its taker),
+			// this test simply waits for the gate like any other.
+			lock (CultureGate.StateLock)
+			{
+				if (CultureGate.PoisonedBy is { } poisonedBy && string.Equals(CultureGate.Holder, poisonedBy, StringComparison.Ordinal))
+				{
+					throw new TimeoutException(
+						$"CultureGate is poisoned: it is still held by {poisonedBy}, which already ran past a bound (a waiter's {CultureGate.Timeout.TotalMinutes} minutes, or the console-capture per-test bound). Failing at once instead of waiting again.");
+				}
+			}
 		}
 
 		if (!CultureGate.Gate.Wait(CultureGate.Timeout))
 		{
-			string holder = CultureGate.Holder ?? "an unknown test";
-			CultureGate.PoisonedBy = holder;
+			string? holder = CultureGate.Holder;
+			_ = holder is not null && CultureGate.TryPoisonWhileHeldBy(holder);
 			throw new TimeoutException(
-				$"CultureGate was not released within {CultureGate.Timeout.TotalMinutes} minutes; it is held by {holder}.");
+				$"CultureGate was not released within {CultureGate.Timeout.TotalMinutes} minutes; it is held by {holder ?? "an unknown test"}.");
 		}
 
 		TakeGate(methodUnderTest);
 	}
 
-	// Called only after this test has acquired the gate.
+	// Called only after this test has acquired the gate, on every acquisition path. Setting the
+	// holder clears any poison in the same step (see CultureGate.StateLock), and the console-capture
+	// per-test bound starts counting from here (ConsoleCaptureTestBound.Clock).
 	private static void TakeGate(MethodInfo methodUnderTest)
 	{
-		CultureGate.Holder = methodUnderTest.DeclaringType?.FullName + "." + methodUnderTest.Name;
+		string holder = methodUnderTest.DeclaringType?.FullName + "." + methodUnderTest.Name;
+		CultureGate.SetHolderAndClearPoison(holder);
 		CultureGate.HeldByCurrentTest = true;
+		ConsoleCaptureTestBound.Clock?.MarkHolding(holder);
 	}
 
 	public override void After(MethodInfo methodUnderTest)
 	{
 		CultureGate.HeldByCurrentTest = false;
-		CultureGate.Holder = null;
+		ConsoleCaptureTestBound.Clock?.MarkNotHolding();
+		CultureGate.ClearHolder();
 		_ = CultureGate.Gate.Release();
 	}
 }
@@ -129,6 +182,18 @@ public sealed class CultureGateConsoleCaptureGuardTests
 	{
 		_ = CultureGate.HeldByCurrentTest.Should().BeTrue("[CultureIsolated] on ConsoleCaptureCollection must take the gate for every test in it");
 		_ = CultureGate.Gate.CurrentCount.Should().Be(0);
+	}
+
+	// L-1 pin: the gate can only be poisoned in the name of the test that holds it. This test holds
+	// the gate, so a poison attempt for any other name must be refused and leave no poison behind.
+	// (The positive case is not exercised here: poisoning the gate this test holds would fail the
+	// next waiter at once, which is the mechanism working, not something to provoke in a suite.)
+	[Fact]
+	public void PoisonAttempt_ForATestThatDoesNotHoldTheGate_IsRefused()
+	{
+		_ = CultureGate.Holder.Should().Be(typeof(CultureGateConsoleCaptureGuardTests).FullName + "." + nameof(PoisonAttempt_ForATestThatDoesNotHoldTheGate_IsRefused));
+		_ = CultureGate.TryPoisonWhileHeldBy("Some.Other.Test.ThatHung").Should().BeFalse("the gate is held by this test, not by the named one");
+		_ = CultureGate.PoisonedBy.Should().BeNull("taking the gate cleared any poison, and a refused attempt must not set one");
 	}
 }
 

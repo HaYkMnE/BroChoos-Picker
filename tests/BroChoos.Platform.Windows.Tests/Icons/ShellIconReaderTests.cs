@@ -70,9 +70,12 @@ public sealed class ShellIconReaderTests(ITestOutputHelper output)
 
 		_ = (await reader.ReadAsync(exe, 16)).Should().BeNull("the hung request times out");
 
-		// The caller's timeout runs from ENQUEUE, but "hung" is measured from when the worker STARTED
-		// the extraction, which is a little later. Wait until the worker is past the hung threshold by
-		// its own clock, so the next request is deterministically a skip and not a queued wait.
+		// Already gated: the extractor blocks on `release`, which is only set below, so the first
+		// request's timeout and the hang are fixed by construction, not raced (checked for the L-2
+		// pattern; nothing here depends on a Sleep finishing in time). The caller's budget runs from
+		// the moment its continuation observes Started, and "hung" is measured by the worker's own
+		// clock from the same start, so wait until the worker is past the hung threshold by that
+		// clock: the next request is then deterministically a skip and not a queued wait.
 		TimeSpan sinceStart = System.Diagnostics.Stopwatch.GetElapsedTime(Interlocked.Read(ref extractionStarted));
 		TimeSpan untilHung = timeout - sinceStart + TimeSpan.FromMilliseconds(100);
 		if (untilHung > TimeSpan.Zero)
@@ -103,25 +106,62 @@ public sealed class ShellIconReaderTests(ITestOutputHelper output)
 
 	// REVIEW C3: the budget starts when a request's extraction STARTS. Two requests, each taking
 	// 70 % of the budget, both succeed: the second waited ~0.7 budget in the queue but its own
-	// extraction stayed inside the budget.
+	// extraction stayed inside the budget. Counted from the enqueue, the second would have needed
+	// ~1.4 budgets and timed out, which is the regression this pins.
+	//
+	// CI FLAKE (run 41083690719, test job, attempt 1): the old form slept 280 ms inside the
+	// extractor against a 400 ms budget. On a loaded 2-vCPU runner the 120 ms margin was eaten by
+	// Sleep overshoot plus the continuation that starts the per-request WaitAsync, so either the
+	// first request's own budget or the worker's "hung" check (busy > budget) fired.
+	//
+	// NOW GATED ON EVENTS. Each extraction signals that it started and then blocks until the test
+	// releases it, so the order (first runs, second queues behind it, second runs) is fixed by
+	// construction, and each extraction is "slow but alive" for exactly the hold the test chooses.
+	// The ratio is kept (hold = 70 % of the budget), and the budget is the product's own 5 s
+	// default, so the safety margin per extraction is 1.5 s instead of 120 ms.
 	[Fact]
 	public async Task QueuedBehindSlowButAliveWork_IsNotTimedOut()
 	{
-		TimeSpan budget = TimeSpan.FromMilliseconds(400);
+		TimeSpan budget = ShellIconReader.DefaultTimeout;
+		TimeSpan hold = budget * 0.7;
+		using SemaphoreSlim started = new(0);
+		using SemaphoreSlim release = new(0);
 		ShellIconReader reader = new(
-			(_, size) =>
+			(path, size) =>
 			{
-				Thread.Sleep(280);
-				return new IconPixels(size, size, new byte[size * size * 4], true);
+				_ = path;
+				_ = started.Release();
+				bool released = release.Wait(TimeSpan.FromSeconds(30));
+				return released ? new IconPixels(size, size, new byte[size * size * 4], true) : null;
 			},
 			budget);
 		string exe = Environment.ProcessPath!;
 
+		System.Diagnostics.Stopwatch sinceSecondEnqueued = System.Diagnostics.Stopwatch.StartNew();
 		Task<IconPixels?> first = reader.ReadAsync(exe, 16);
 		Task<IconPixels?> second = reader.ReadAsync(exe, 16);
 
+		await HoldOneExtractionAsync(started, release, hold);
 		_ = (await first).Should().NotBeNull();
-		_ = (await second).Should().NotBeNull("waiting in the queue does not count against its own budget");
+
+		await HoldOneExtractionAsync(started, release, hold);
+		IconPixels? secondResult = await second;
+		TimeSpan secondTotal = sinceSecondEnqueued.Elapsed;
+
+		_ = secondResult.Should().NotBeNull("waiting in the queue does not count against its own budget");
+
+		// Guards against a vacuous pass: the second request really did take longer than one
+		// budget from its enqueue, so a budget counted from the enqueue would have failed it.
+		_ = secondTotal.Should().BeGreaterThan(budget, "the second request waited a full hold in the queue and then ran for another, ~1.4 budgets in all");
+	}
+
+	// Waits (bounded) for the next extraction to start, keeps it running for `hold`, then lets it
+	// finish. The hold is a test-side delay; the extractor itself never sleeps.
+	private static async Task HoldOneExtractionAsync(SemaphoreSlim started, SemaphoreSlim release, TimeSpan hold)
+	{
+		_ = (await started.WaitAsync(TimeSpan.FromSeconds(30))).Should().BeTrue("the worker must start the next queued extraction");
+		await Task.Delay(hold);
+		_ = release.Release();
 	}
 
 	[Fact]

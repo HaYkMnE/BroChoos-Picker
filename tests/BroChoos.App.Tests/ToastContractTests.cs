@@ -42,13 +42,28 @@ public sealed class ToastContractTests
 	public async Task GhostToast_ShownOnOpen_RespectsLifetimeAndRateCap()
 	{
 		bool ghostToastShown = false;
+		System.Diagnostics.Stopwatch sinceShown = new();
+		TimeSpan closedAfter = TimeSpan.Zero;
 		TaskCompletionSource ghostClosedSignal = new(TaskCreationOptions.RunContinuationsAsynchronously);
 		PickerSession session = NewSession();
 		session.ConfigureToastHooksForTests(
-			onGhostToast: () => ghostToastShown = true,
-			onGhostToastClosed: () => _ = ghostClosedSignal.TrySetResult(),
+			onGhostToast: () =>
+			{
+				ghostToastShown = true;
+				// Started here, BEFORE the product starts its lifetime wait, so the measured time
+				// can only be longer than the product's own wait, never shorter.
+				sinceShown.Restart();
+			},
+			onGhostToastClosed: () =>
+			{
+				closedAfter = sinceShown.Elapsed;
+				_ = ghostClosedSignal.TrySetResult();
+			},
 			onCleanupToast: null,
 			onCleanupToastClosed: null);
+
+		// The window used below is pinned first, so a change to the constant cannot move it.
+		_ = GhostToastWindow.Lifetime.Should().Be(TimeSpan.FromSeconds(3), "the ghost toast's lifetime contract is 3 s");
 
 		await session.SimulateWindowOpenForTestsAsync();
 
@@ -61,6 +76,16 @@ public sealed class ToastContractTests
 		Task winner = await Task.WhenAny(ghostClosedSignal.Task, Task.Delay(TimeSpan.FromSeconds(60)));
 
 		_ = ReferenceEquals(winner, ghostClosedSignal.Task).Should().BeTrue("ghost toast should auto-close after 3s lifetime");
+
+		// Both bounds are measured from the show. The 50 ms slack below only absorbs timer-tick
+		// rounding between the product's timer and this Stopwatch; the upper bound fails a toast
+		// that closes on some other, much later timer, with 10 s of slack for a loaded runner.
+		_ = closedAfter.Should().BeGreaterThanOrEqualTo(
+			GhostToastWindow.Lifetime - TimeSpan.FromMilliseconds(50),
+			"the ghost toast must stay up for its whole 3 s lifetime before it auto-closes");
+		_ = closedAfter.Should().BeLessThan(
+			GhostToastWindow.Lifetime + TimeSpan.FromSeconds(10),
+			"the auto-close must come from the 3 s lifetime, not from a later timer");
 
 		ghostToastShown = false;
 		await session.SimulateWindowOpenForTestsAsync();

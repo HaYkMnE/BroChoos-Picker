@@ -241,10 +241,12 @@ public sealed class AvaloniaUiTestFramework(IMessageSink messageSink) : XunitTes
 		// WAITER waits, but nothing bounded the HOLDER: a console-capture test that hung while
 		// holding the gate stalled its collection until the CI job was cancelled. These three
 		// runners are xUnit's own (XunitTestCollectionRunner -> XunitTestClassRunner ->
-		// XunitTestMethodRunner) with one change at the bottom: each test case runs against
-		// ConsoleCaptureTestBound.Timeout. When it expires, the hung test is reported as FAILED BY
-		// NAME, its later messages are dropped (TestCaseCutoffBus), the gate is poisoned so every
-		// later gated test fails at once, and the collection moves on. Scheduling is unchanged: the
+		// XunitTestMethodRunner) with one change at the bottom: each test case may HOLD the gate
+		// for at most ConsoleCaptureTestBound.Timeout (waiting for it is not counted). When that
+		// expires, the hung test is reported as FAILED BY NAME with the results it already had,
+		// its later messages are dropped (TestCaseCutoffBus), the gate is poisoned in its name so
+		// later gated tests fail at once while it still holds it, and the collection moves on.
+		// Scheduling is unchanged: the
 		// collection still runs on the pool, one test at a time, in parallel with avalonia-ui.
 		private sealed class BoundedCollectionRunner(
 			ITestCollection collection,
@@ -297,11 +299,14 @@ public sealed class AvaloniaUiTestFramework(IMessageSink messageSink) : XunitTes
 				// The base runs the case as testCase.RunAsync(..., MessageBus, ...), reading MessageBus
 				// synchronously at the call. Swapping in the per-case cutoff bus around that call is
 				// therefore exact, and safe because a method runner runs its cases one after another.
-				// The flag flows (AsyncLocal) into the test, where the guard test reads it.
+				// Active and Clock flow (AsyncLocal) into the test: the guard test reads Active, and
+				// [CultureIsolated] marks on Clock when this case holds the gate.
 				TestCaseCutoffBus caseBus = new(MessageBus);
 				IMessageBus original = MessageBus;
 				Stopwatch elapsed = Stopwatch.StartNew();
+				ConsoleCaptureTestBound.CaseClock clock = new();
 				ConsoleCaptureTestBound.Active = true;
+				ConsoleCaptureTestBound.Clock = clock;
 				Task<RunSummary> run;
 				try
 				{
@@ -313,12 +318,29 @@ public sealed class AvaloniaUiTestFramework(IMessageSink messageSink) : XunitTes
 					MessageBus = original;
 				}
 
-				try
+				// N-2: THE BOUND COUNTS ONLY TIME SPENT HOLDING THE GATE. Time a case spends waiting
+				// for the gate is already bounded by CultureGate.Timeout (that waiter then fails with
+				// the holder's name), so it is not charged here. The case is hung when it has held the
+				// gate continuously for longer than Timeout. A backstop (OverallTimeout) covers a
+				// case that hangs outside the gate (constructor, Dispose) and is reported as such.
+				while (true)
 				{
-					return await run.WaitAsync(ConsoleCaptureTestBound.Timeout).ConfigureAwait(false);
-				}
-				catch (TimeoutException)
-				{
+					using CancellationTokenSource tick = new();
+					Task delay = Task.Delay(ConsoleCaptureTestBound.PollInterval, tick.Token);
+					Task first = await Task.WhenAny(run, delay).ConfigureAwait(false);
+					await tick.CancelAsync().ConfigureAwait(false);
+					if (first == run)
+					{
+						return await run.ConfigureAwait(false);
+					}
+
+					bool heldTooLong = clock.HeldFor > ConsoleCaptureTestBound.Timeout;
+					bool ranTooLong = elapsed.Elapsed > ConsoleCaptureTestBound.OverallTimeout;
+					if (!heldTooLong && !ranTooLong)
+					{
+						continue;
+					}
+
 					if (caseBus.Close())
 					{
 						// The case reported TestCaseFinished in the instant before the cutoff, so it is
@@ -326,45 +348,67 @@ public sealed class AvaloniaUiTestFramework(IMessageSink messageSink) : XunitTes
 						return await run.ConfigureAwait(false);
 					}
 
-					return ReportHung(testCase, caseBus, original, (decimal)elapsed.Elapsed.TotalSeconds);
+					return ReportHung(testCase, caseBus, original, clock, heldTooLong, (decimal)elapsed.Elapsed.TotalSeconds);
 				}
 			}
 
-			private static RunSummary ReportHung(IXunitTestCase testCase, TestCaseCutoffBus caseBus, IMessageBus target, decimal seconds)
+			private static RunSummary ReportHung(IXunitTestCase testCase, TestCaseCutoffBus caseBus, IMessageBus target, ConsoleCaptureTestBound.CaseClock clock, bool heldTooLong, decimal seconds)
 			{
 				string name = testCase.DisplayName;
-				string? holder = CultureGate.Holder;
-				if (holder is not null)
+				string? gateHolder = CultureGate.Holder;
+				string text;
+				if (heldTooLong && clock.HolderName is { } self)
 				{
-					CultureGate.PoisonedBy ??= holder;
+					// Poisoned only while this case still holds the gate, atomically with that check
+					// (L-1), so a later message can never name it once someone else holds the gate.
+					bool poisoned = CultureGate.TryPoisonWhileHeldBy(self);
+					text = $"The console-capture test '{name}' held the CultureGate for more than {ConsoleCaptureTestBound.Timeout.TotalMinutes} minutes; it is hung while holding it. It keeps running in the background and its later output is discarded.{(poisoned ? " Every later CultureGate waiter fails at once while it still holds the gate." : string.Empty)}";
+				}
+				else
+				{
+					text = $"The console-capture test '{name}' did not finish within {ConsoleCaptureTestBound.OverallTimeout.TotalMinutes} minutes and was NOT holding the CultureGate at that point (current holder: {gateHolder ?? "none"}); it hung outside the gated section (constructor, Dispose, or waiting for the gate). Its later output is discarded.";
 				}
 
-				TimeoutException hung = new(
-					$"The console-capture test '{name}' did not finish within {ConsoleCaptureTestBound.Timeout.TotalMinutes} minutes; it is hung (CultureGate holder: {holder ?? "none"}). It keeps running in the background, its later output is discarded, and every later CultureGate waiter fails at once.");
+				TimeoutException hung = new(text);
 
-				// Whatever the hung case already reported stays; the rest of its message sequence is
-				// completed here so the runner sees one balanced, failed test.
-				ITest test = caseBus.StartedTest ?? new XunitTest(testCase, name);
+				// N-1: whatever the hung case already reported stays, and its counts are kept; the
+				// rest of its message sequence is completed here so the runner sees a balanced case
+				// with its real results plus one failure for the hang.
 				if (!caseBus.SawCaseStarting)
 				{
 					_ = target.QueueMessage(new TestCaseStarting(testCase));
 				}
 
-				if (caseBus.StartedTest is null)
+				ITest? open = caseBus.OpenTest;
+				if (open is not null && caseBus.OpenTestHasResult)
+				{
+					// The open test already has its own result: close it, and report the hang as a
+					// separate test so no test gets two results.
+					_ = target.QueueMessage(new TestFinished(open, 0, string.Empty));
+					open = null;
+				}
+
+				ITest test = open ?? new XunitTest(testCase, name);
+				if (open is null)
 				{
 					_ = target.QueueMessage(new TestStarting(test));
 				}
 
 				_ = target.QueueMessage(new TestFailed(test, seconds, string.Empty, hung));
 				_ = target.QueueMessage(new TestFinished(test, seconds, string.Empty));
-				_ = target.QueueMessage(new TestCaseFinished(testCase, seconds, 1, 1, 0));
-				return new RunSummary { Total = 1, Failed = 1, Time = seconds };
+
+				int total = caseBus.Total + 1;
+				int failed = caseBus.Failed + 1;
+				_ = target.QueueMessage(new TestCaseFinished(testCase, seconds, total, failed, caseBus.Skipped));
+				return new RunSummary { Total = total, Failed = failed, Skipped = caseBus.Skipped, Time = seconds };
 			}
 		}
 
 		// Forwards one test case's messages until Close and remembers how far the case got, so a
-		// hung case can be completed with exactly the messages it has not sent. After Close every
-		// message is dropped and true is returned (a false return would cancel the whole run).
+		// hung case can be completed with exactly the messages it has not sent. It counts results
+		// the way CutoffMessageBus does (N-1), so a hung Theory keeps the counts of the rows that
+		// already ran. After Close every message is dropped and true is returned (a false return
+		// would cancel the whole run).
 		private sealed class TestCaseCutoffBus(IMessageBus inner) : IMessageBus
 		{
 			private readonly Lock gate = new();
@@ -373,7 +417,16 @@ public sealed class AvaloniaUiTestFramework(IMessageSink messageSink) : XunitTes
 
 			internal bool SawCaseStarting { get; private set; }
 
-			internal ITest? StartedTest { get; private set; }
+			// The test that has started and not finished yet, and whether it already has a result.
+			internal ITest? OpenTest { get; private set; }
+
+			internal bool OpenTestHasResult { get; private set; }
+
+			internal int Total { get; private set; }
+
+			internal int Failed { get; private set; }
+
+			internal int Skipped { get; private set; }
 
 			public bool QueueMessage(IMessageSinkMessage message)
 			{
@@ -390,7 +443,26 @@ public sealed class AvaloniaUiTestFramework(IMessageSink messageSink) : XunitTes
 							SawCaseStarting = true;
 							break;
 						case ITestStarting starting:
-							StartedTest = starting.Test;
+							OpenTest = starting.Test;
+							OpenTestHasResult = false;
+							break;
+						case ITestFailed:
+							Total++;
+							Failed++;
+							OpenTestHasResult = true;
+							break;
+						case ITestSkipped:
+							Total++;
+							Skipped++;
+							OpenTestHasResult = true;
+							break;
+						case ITestPassed:
+							Total++;
+							OpenTestHasResult = true;
+							break;
+						case ITestFinished:
+							OpenTest = null;
+							OpenTestHasResult = false;
 							break;
 						case ITestCaseFinished:
 							finished = true;
@@ -665,19 +737,98 @@ internal static class AvaloniaUiThread
 
 // The per-test bound applied to the console-capture collection by AvaloniaUiTestFramework
 // (BoundedMethodRunner). The slowest console-capture test takes about 10 s under the CI-load
-// simulation (the 8 s toast lifetime plus scheduling); 5 minutes is far above that, and below
-// CultureGate.Timeout, so a hung holder is reported by name before a waiter gives up on it.
+// simulation (the 8 s toast lifetime plus scheduling); 5 minutes of HOLDING the gate is far
+// above that, and below CultureGate.Timeout, so a hung holder is reported by name before a
+// waiter gives up on it. Time spent waiting for the gate is not counted (N-2); the backstop
+// OverallTimeout covers a case that hangs outside the gated section.
 internal static class ConsoleCaptureTestBound
 {
 	internal static readonly TimeSpan Timeout = TimeSpan.FromMinutes(5);
 
+	// Waiting for the gate (up to CultureGate.Timeout) plus holding it (Timeout) plus a margin.
+	internal static readonly TimeSpan OverallTimeout = CultureGate.Timeout + Timeout + TimeSpan.FromMinutes(2);
+
+	// How often the runner checks the clock while a case is running; it costs nothing for a case
+	// that finishes first, because the wait ends with the case.
+	internal static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(1);
+
 	private static readonly AsyncLocal<bool> ActiveFlag = new();
+
+	private static readonly AsyncLocal<CaseClock?> ClockSlot = new();
 
 	// True inside a test that runs under the bound; the guard test below fails if it is not.
 	internal static bool Active
 	{
 		get => ActiveFlag.Value;
 		set => ActiveFlag.Value = value;
+	}
+
+	// The running case's clock; null outside the console-capture collection.
+	internal static CaseClock? Clock
+	{
+		get => ClockSlot.Value;
+		set => ClockSlot.Value = value;
+	}
+
+	// Written by the test's [CultureIsolated] Before/After, read by the runner, under one lock.
+	// A Theory takes and releases the gate once per row, so each acquisition restarts the clock.
+	internal sealed class CaseClock
+	{
+		private readonly Lock _gate = new();
+
+		// Both values change together, so they are kept as one pair and read and written under
+		// _gate: Since is a Stopwatch timestamp of the current acquisition, 0 when not holding.
+		private (long Since, string? Name) _state;
+
+		internal string? HolderName
+		{
+			get
+			{
+				lock (_gate)
+				{
+					return _state.Name;
+				}
+			}
+		}
+
+		internal bool IsHolding
+		{
+			get
+			{
+				lock (_gate)
+				{
+					return _state.Since != 0;
+				}
+			}
+		}
+
+		// How long the case has held the gate in its current acquisition; zero when not holding.
+		internal TimeSpan HeldFor
+		{
+			get
+			{
+				lock (_gate)
+				{
+					return _state.Since == 0 ? TimeSpan.Zero : Stopwatch.GetElapsedTime(_state.Since);
+				}
+			}
+		}
+
+		internal void MarkHolding(string holder)
+		{
+			lock (_gate)
+			{
+				_state = (Stopwatch.GetTimestamp(), holder);
+			}
+		}
+
+		internal void MarkNotHolding()
+		{
+			lock (_gate)
+			{
+				_state = (0, _state.Name);
+			}
+		}
 	}
 }
 
@@ -720,6 +871,13 @@ public sealed class AvaloniaUiThreadConsoleCaptureGuardTests
 	{
 		_ = ConsoleCaptureTestBound.Active.Should().BeTrue("AvaloniaUiTestFramework must run every console-capture test through BoundedMethodRunner, so a test that hangs while holding the CultureGate is reported by name");
 		_ = ConsoleCaptureTestBound.Timeout.Should().BeLessThan(CultureGate.Timeout, "the holder must be reported before a waiter gives up on the gate");
+
+		// N-2 pin: the bound counts from the moment the gate is HELD, so inside the test body the
+		// clock must already read as holding, in this test's name.
+		ConsoleCaptureTestBound.CaseClock? clock = ConsoleCaptureTestBound.Clock;
+		_ = clock.Should().NotBeNull("the runner must hand every console-capture case a clock");
+		_ = clock!.IsHolding.Should().BeTrue("[CultureIsolated] Before must start the bound when it acquires the gate");
+		_ = clock.HolderName.Should().Be(CultureGate.Holder, "the clock and the gate must name the same holder");
 	}
 
 	[Fact]
