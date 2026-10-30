@@ -114,11 +114,17 @@ public sealed class ShellIconReaderTests(ITestOutputHelper output)
 	// Sleep overshoot plus the continuation that starts the per-request WaitAsync, so either the
 	// first request's own budget or the worker's "hung" check (busy > budget) fired.
 	//
-	// NOW GATED ON EVENTS. Each extraction signals that it started and then blocks until the test
-	// releases it, so the order (first runs, second queues behind it, second runs) is fixed by
+	// NOW GATED ON EVENTS. Each extraction signals that it started and then blocks until it is
+	// released, so the order (first runs, second queues behind it, second runs) is fixed by
 	// construction, and each extraction is "slow but alive" for exactly the hold the test chooses.
 	// The ratio is kept (hold = 70 % of the budget), and the budget is the product's own 5 s
 	// default, so the safety margin per extraction is 1.5 s instead of 120 ms.
+	//
+	// N-1: THE HOLD IS RELEASED OFF THE THREAD POOL, AT A MONOTONIC DEADLINE. The extractor stamps
+	// the Stopwatch time at which it started, on the worker thread, before it signals. A dedicated
+	// thread (not a pool worker) waits for that signal and releases the extraction at exactly
+	// start + hold by that stamp, so a late pool continuation can no longer stretch the hold into
+	// the budget's margin.
 	[Fact]
 	public async Task QueuedBehindSlowButAliveWork_IsNotTimedOut()
 	{
@@ -126,10 +132,18 @@ public sealed class ShellIconReaderTests(ITestOutputHelper output)
 		TimeSpan hold = budget * 0.7;
 		using SemaphoreSlim started = new(0);
 		using SemaphoreSlim release = new(0);
+		long[] startedAt = new long[2];
+		int extractions = 0;
 		ShellIconReader reader = new(
 			(path, size) =>
 			{
 				_ = path;
+				int index = Interlocked.Increment(ref extractions) - 1;
+				if (index < startedAt.Length)
+				{
+					Volatile.Write(ref startedAt[index], System.Diagnostics.Stopwatch.GetTimestamp());
+				}
+
 				_ = started.Release();
 				bool released = release.Wait(TimeSpan.FromSeconds(30));
 				return released ? new IconPixels(size, size, new byte[size * size * 4], true) : null;
@@ -137,17 +151,41 @@ public sealed class ShellIconReaderTests(ITestOutputHelper output)
 			budget);
 		string exe = Environment.ProcessPath!;
 
+		bool[] holderSawStart = new bool[2];
+		TimeSpan[] heldFor = new TimeSpan[2];
+		Thread holder = new(() =>
+		{
+			for (int i = 0; i < holderSawStart.Length; i++)
+			{
+				holderSawStart[i] = started.Wait(TimeSpan.FromSeconds(30));
+				if (!holderSawStart[i])
+				{
+					return;
+				}
+
+				long since = Volatile.Read(ref startedAt[i]);
+				HoldUntil(since, hold);
+				heldFor[i] = System.Diagnostics.Stopwatch.GetElapsedTime(since);
+				_ = release.Release();
+			}
+		})
+		{
+			IsBackground = true,
+			Name = "ShellIconReaderTests hold releaser",
+		};
+
 		System.Diagnostics.Stopwatch sinceSecondEnqueued = System.Diagnostics.Stopwatch.StartNew();
 		Task<IconPixels?> first = reader.ReadAsync(exe, 16);
 		Task<IconPixels?> second = reader.ReadAsync(exe, 16);
+		holder.Start();
 
-		await HoldOneExtractionAsync(started, release, hold);
 		_ = (await first).Should().NotBeNull();
-
-		await HoldOneExtractionAsync(started, release, hold);
 		IconPixels? secondResult = await second;
 		TimeSpan secondTotal = sinceSecondEnqueued.Elapsed;
+		_ = holder.Join(TimeSpan.FromSeconds(30)).Should().BeTrue("the releaser thread ends after the second hold");
 
+		_ = holderSawStart.Should().AllSatisfy(saw => saw.Should().BeTrue("the worker must start each queued extraction"));
+		_output.WriteLine($"HOLD_PROBE hold={hold.TotalMilliseconds}ms heldFor=[{heldFor[0].TotalMilliseconds:F0}, {heldFor[1].TotalMilliseconds:F0}]ms secondTotal={secondTotal.TotalMilliseconds:F0}ms budget={budget.TotalMilliseconds}ms");
 		_ = secondResult.Should().NotBeNull("waiting in the queue does not count against its own budget");
 
 		// Guards against a vacuous pass: the second request really did take longer than one
@@ -155,13 +193,21 @@ public sealed class ShellIconReaderTests(ITestOutputHelper output)
 		_ = secondTotal.Should().BeGreaterThan(budget, "the second request waited a full hold in the queue and then ran for another, ~1.4 budgets in all");
 	}
 
-	// Waits (bounded) for the next extraction to start, keeps it running for `hold`, then lets it
-	// finish. The hold is a test-side delay; the extractor itself never sleeps.
-	private static async Task HoldOneExtractionAsync(SemaphoreSlim started, SemaphoreSlim release, TimeSpan hold)
+	// Blocks the calling (dedicated) thread until `hold` has passed since the Stopwatch timestamp
+	// `since`. Sleeps in short steps and re-reads the monotonic clock, so an oversleep is bounded by
+	// one step plus OS scheduling, not by the thread pool.
+	private static void HoldUntil(long since, TimeSpan hold)
 	{
-		_ = (await started.WaitAsync(TimeSpan.FromSeconds(30))).Should().BeTrue("the worker must start the next queued extraction");
-		await Task.Delay(hold);
-		_ = release.Release();
+		while (true)
+		{
+			TimeSpan left = hold - System.Diagnostics.Stopwatch.GetElapsedTime(since);
+			if (left <= TimeSpan.Zero)
+			{
+				return;
+			}
+
+			Thread.Sleep(left > TimeSpan.FromMilliseconds(20) ? TimeSpan.FromMilliseconds(20) : left);
+		}
 	}
 
 	[Fact]

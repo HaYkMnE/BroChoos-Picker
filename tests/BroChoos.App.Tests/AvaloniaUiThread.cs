@@ -357,11 +357,12 @@ public sealed class AvaloniaUiTestFramework(IMessageSink messageSink) : XunitTes
 				string name = testCase.DisplayName;
 				string? gateHolder = CultureGate.Holder;
 				string text;
-				if (heldTooLong && clock.HolderName is { } self)
+				if (heldTooLong && clock.LastAcquisition is { } self)
 				{
-					// Poisoned only while this case still holds the gate, atomically with that check
-					// (L-1), so a later message can never name it once someone else holds the gate.
-					bool poisoned = CultureGate.TryPoisonWhileHeldBy(self);
+					// Poisoned only while this case's own acquisition (its epoch) still holds the gate,
+					// atomically with that check (L-1), so a later row with the same name or another
+					// test that took the gate since is never named.
+					bool poisoned = CultureGate.State.TryPoisonWhileHeldBy(self.Epoch, self.Name, out _);
 					text = $"The console-capture test '{name}' held the CultureGate for more than {ConsoleCaptureTestBound.Timeout.TotalMinutes} minutes; it is hung while holding it. It keeps running in the background and its later output is discarded.{(poisoned ? " Every later CultureGate waiter fails at once while it still holds the gate." : string.Empty)}";
 				}
 				else
@@ -388,7 +389,9 @@ public sealed class AvaloniaUiTestFramework(IMessageSink messageSink) : XunitTes
 					open = null;
 				}
 
-				ITest test = open ?? new XunitTest(testCase, name);
+				// N-3: a separate hang test gets its own display name, so TRX does not merge it with
+				// a test of the same name that already finished.
+				ITest test = open ?? new XunitTest(testCase, name + " [hang]");
 				if (open is null)
 				{
 					_ = target.QueueMessage(new TestStarting(test));
@@ -776,9 +779,10 @@ internal static class ConsoleCaptureTestBound
 	{
 		private readonly Lock _gate = new();
 
-		// Both values change together, so they are kept as one pair and read and written under
-		// _gate: Since is a Stopwatch timestamp of the current acquisition, 0 when not holding.
-		private (long Since, string? Name) _state;
+		// The values change together, so they are kept as one tuple and read and written under
+		// _gate: Since is a Stopwatch timestamp of the current acquisition, 0 when not holding;
+		// Epoch is that acquisition's CultureGateState epoch.
+		private (long Since, string? Name, long Epoch) _state;
 
 		internal string? HolderName
 		{
@@ -787,6 +791,19 @@ internal static class ConsoleCaptureTestBound
 				lock (_gate)
 				{
 					return _state.Name;
+				}
+			}
+		}
+
+		// The case's latest acquisition (name and epoch), kept after release like HolderName, or
+		// null before the first one. Poisoning with it is refused once that acquisition has ended.
+		internal (string Name, long Epoch)? LastAcquisition
+		{
+			get
+			{
+				lock (_gate)
+				{
+					return _state.Name is { } name ? (name, _state.Epoch) : null;
 				}
 			}
 		}
@@ -814,11 +831,11 @@ internal static class ConsoleCaptureTestBound
 			}
 		}
 
-		internal void MarkHolding(string holder)
+		internal void MarkHolding(string holder, long epoch)
 		{
 			lock (_gate)
 			{
-				_state = (Stopwatch.GetTimestamp(), holder);
+				_state = (Stopwatch.GetTimestamp(), holder, epoch);
 			}
 		}
 
@@ -826,7 +843,7 @@ internal static class ConsoleCaptureTestBound
 		{
 			lock (_gate)
 			{
-				_state = (0, _state.Name);
+				_state = (0, _state.Name, _state.Epoch);
 			}
 		}
 	}
