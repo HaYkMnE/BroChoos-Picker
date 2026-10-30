@@ -11,6 +11,11 @@
     <ProjectReference Include="..\..\src\BroChoos.StorageHelper\BroChoos.StorageHelper.csproj" />
   </ItemGroup>
 
+  <!-- Shared by LINK with BroChoos.Platform.Windows.Tests: best-effort %TEMP% cleanup. -->
+  <ItemGroup>
+    <Compile Include="..\BroChoos.Platform.Windows.Tests\TestSupport\TestTempCleanup.cs" Link="TestSupport\TestTempCleanup.cs" />
+  </ItemGroup>
+
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
     <PackageReference Include="xunit" />

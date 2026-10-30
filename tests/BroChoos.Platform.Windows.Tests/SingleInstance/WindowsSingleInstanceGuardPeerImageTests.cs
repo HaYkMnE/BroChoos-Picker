@@ -4,6 +4,7 @@ using System.Text;
 using BroChoos.Core.Abstractions;
 using BroChoos.Core.Ingress;
 using BroChoos.Platform.Windows.SingleInstance;
+using BroChoos.Platform.Windows.Tests.TestSupport;
 using FluentAssertions;
 using Microsoft.Extensions.Logging;
 using Xunit;
@@ -39,16 +40,29 @@ public sealed class WindowsSingleInstanceGuardPeerImageTests
 
 		// The impostor: a REAL separate process (cmd.exe), not this test host. It connects
 		// to the guard's pipe and speaks the protocol correctly.
-		using Process impostor = StartImpostorClient(primary, out Task<int> impostorExit);
-		int exitCode = await impostorExit;
+		string? scriptPath = null;
+		try
+		{
+			using Process impostor = StartImpostorClient(primary, out Task<int> impostorExit, out scriptPath);
+			int exitCode = await impostorExit;
 
-		_ = exitCode.Should().Be(2, "the guard must reject the connection (the client reports 2 for Rejected)");
+			_ = exitCode.Should().Be(2, "the guard must reject the connection (the client reports 2 for Rejected)");
 
-		await Task.Delay(300);
-		_ = primary.Received.Should().BeEmpty("a connection from a foreign image must never reach the queue");
-		_ = primary.Logger.Entries.Should().Contain(
-			entry => entry.Contains("ipc.peer.image-mismatch", StringComparison.Ordinal),
-			"the refusal must be a named, observable marker");
+			await Task.Delay(300);
+			_ = primary.Received.Should().BeEmpty("a connection from a foreign image must never reach the queue");
+			_ = primary.Logger.Entries.Should().Contain(
+				entry => entry.Contains("ipc.peer.image-mismatch", StringComparison.Ordinal),
+				"the refusal must be a named, observable marker");
+		}
+		finally
+		{
+			// The exit continuation deletes the script too, but only once the child exits; this
+			// covers a failure before that point. Best effort: a missing file is not an error.
+			if (scriptPath is not null)
+			{
+				TestTempCleanup.DeleteFile(scriptPath);
+			}
+		}
 	}
 
 	[SkippableFact]
@@ -84,19 +98,20 @@ public sealed class WindowsSingleInstanceGuardPeerImageTests
 		_ = delivered.Should().BeTrue("the accepted forward must reach the picker handoff");
 	}
 
-	private static Process StartImpostorClient(PrimaryHost primary, out Task<int> exitCode)
+	private static Process StartImpostorClient(PrimaryHost primary, out Task<int> exitCode, out string scriptPath)
 	{
 		// The child runs a script that connects to the guard's pipe, writes a valid
 		// identity frame plus a valid activation request, and reports the ack status.
 		// It uses PowerShell because the frame is a small amount of binary protocol and
 		// this keeps the test free of a purpose-built helper executable.
 		string script = BuildImpostorScript(PrimaryHost.PipeName, primary.IssueSecret());
-		string scriptPath = Path.Combine(Path.GetTempPath(), $"brochoos-impostor-{Guid.NewGuid():N}.ps1");
-		File.WriteAllText(scriptPath, script);
+		string path = Path.Combine(Path.GetTempPath(), $"brochoos-impostor-{Guid.NewGuid():N}.ps1");
+		scriptPath = path;
+		File.WriteAllText(path, script);
 
 		ProcessStartInfo startInfo = new("powershell.exe")
 		{
-			Arguments = $"-NoProfile -ExecutionPolicy Bypass -File \"{scriptPath}\"",
+			Arguments = $"-NoProfile -ExecutionPolicy Bypass -File \"{path}\"",
 			UseShellExecute = false,
 			CreateNoWindow = true,
 			RedirectStandardOutput = true,
@@ -109,7 +124,7 @@ public sealed class WindowsSingleInstanceGuardPeerImageTests
 		Process child = Process.Start(startInfo)!;
 		exitCode = child.WaitForExitAsync().ContinueWith(_ =>
 		{
-			File.Delete(scriptPath);
+			TestTempCleanup.DeleteFile(path);
 			return child.ExitCode;
 		}, TaskScheduler.Default);
 

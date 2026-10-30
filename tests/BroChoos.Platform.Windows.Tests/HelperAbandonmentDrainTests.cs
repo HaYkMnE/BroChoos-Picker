@@ -2,6 +2,7 @@ using System.Diagnostics;
 using BroChoos.Core.Abstractions;
 using BroChoos.Platform.Windows.Browsers;
 using BroChoos.Platform.Windows.Network;
+using BroChoos.Platform.Windows.Tests.TestSupport;
 using FluentAssertions;
 using Xunit;
 
@@ -545,21 +546,13 @@ public sealed class HelperAbandonmentDrainTests
 			return new SlowOutputStub(directoryPath, executablePath, command);
 		}
 
+		// A child still sleeping in its ping (a failing run, or one abandoned before the echo) is
+		// killed first, verified by its full image path; then the folder goes, with one short
+		// retry for an image the just-killed child still holds. Never fails the test.
 		public void Dispose()
 		{
-			try
-			{
-				if (Directory.Exists(DirectoryPath))
-				{
-					Directory.Delete(DirectoryPath, recursive: true);
-				}
-			}
-			catch (IOException)
-			{
-			}
-			catch (UnauthorizedAccessException)
-			{
-			}
+			TestTempCleanup.KillSurvivors(ExecutablePath);
+			TestTempCleanup.DeleteDirectory(DirectoryPath);
 		}
 	}
 
@@ -590,21 +583,12 @@ public sealed class HelperAbandonmentDrainTests
 			return new FastExitStub(directoryPath, executablePath);
 		}
 
+		// Same cleanup as SlowOutputStub: kill a survivor verified by image path, then delete
+		// with one short retry.
 		public void Dispose()
 		{
-			try
-			{
-				if (Directory.Exists(DirectoryPath))
-				{
-					Directory.Delete(DirectoryPath, recursive: true);
-				}
-			}
-			catch (IOException)
-			{
-			}
-			catch (UnauthorizedAccessException)
-			{
-			}
+			TestTempCleanup.KillSurvivors(ExecutablePath);
+			TestTempCleanup.DeleteDirectory(DirectoryPath);
 		}
 	}
 

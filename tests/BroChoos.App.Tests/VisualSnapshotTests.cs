@@ -29,6 +29,10 @@ namespace BroChoos.App.Tests;
 // never activated), because an Avalonia Application is process-wide and cannot be configured
 // twice; Avalonia.Headless is not referenced by this repo. Output goes to
 // BROCHOOS_VISUAL_SNAPSHOTS_DIR, default %TEMP%\brochoos-visual-check.
+//
+// That output folder is LEFT IN PLACE on purpose: the PNGs and the report are the product of
+// this opt-in run and are meant to be opened afterwards. A routine `dotnet test` (CI included)
+// skips the test and creates nothing there.
 public sealed class VisualSnapshotFactAttribute : FactAttribute
 {
 	public VisualSnapshotFactAttribute()

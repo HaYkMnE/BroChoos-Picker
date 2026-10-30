@@ -20,6 +20,9 @@
        product value is not reachable from here without a product change. -->
   <ItemGroup>
     <Compile Include="..\BroChoos.Platform.Windows.Tests\SingleInstance\SharedGuardMutex.cs" Link="SingleInstance\SharedGuardMutex.cs" />
+    <!-- The same single-copy rule for the best-effort %TEMP% cleanup the stubs and fixed
+         temp parents use. -->
+    <Compile Include="..\BroChoos.Platform.Windows.Tests\TestSupport\TestTempCleanup.cs" Link="TestSupport\TestTempCleanup.cs" />
   </ItemGroup>
 
   <ItemGroup>

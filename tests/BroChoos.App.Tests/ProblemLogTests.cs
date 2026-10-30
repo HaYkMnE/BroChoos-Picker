@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using BroChoos.App.Logging;
 using BroChoos.Platform.Windows.Storage;
+using BroChoos.Platform.Windows.Tests.TestSupport;
 using FluentAssertions;
 using Microsoft.Extensions.Logging;
 using Xunit;
@@ -35,10 +36,13 @@ public sealed partial class ProblemLogTests : IDisposable
 		{
 			Directory.Delete(_root, recursive: true);
 		}
-		catch (IOException)
+		catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
 		{
-			// Best-effort temp cleanup.
+			// Best-effort temp cleanup: a read-only or still-open file must not fail the test.
 		}
+
+		// The fixed parent goes once the last per-test folder is gone; best effort, never throws.
+		TestTempCleanup.DeleteDirectoryIfEmpty(Path.GetDirectoryName(_root)!);
 
 		GC.SuppressFinalize(this);
 	}

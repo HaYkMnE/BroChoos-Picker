@@ -42,11 +42,11 @@ public sealed class ToastContractTests
 	public async Task GhostToast_ShownOnOpen_RespectsLifetimeAndRateCap()
 	{
 		bool ghostToastShown = false;
-		bool ghostToastClosed = false;
+		TaskCompletionSource ghostClosedSignal = new(TaskCreationOptions.RunContinuationsAsynchronously);
 		PickerSession session = NewSession();
 		session.ConfigureToastHooksForTests(
 			onGhostToast: () => ghostToastShown = true,
-			onGhostToastClosed: () => ghostToastClosed = true,
+			onGhostToastClosed: () => _ = ghostClosedSignal.TrySetResult(),
 			onCleanupToast: null,
 			onCleanupToastClosed: null);
 
@@ -54,9 +54,13 @@ public sealed class ToastContractTests
 
 		_ = ghostToastShown.Should().BeTrue("ghost toast should be shown on open");
 
-		await Task.Delay(TimeSpan.FromSeconds(3).Add(TimeSpan.FromMilliseconds(100)));
+		// Waits for the close signal itself, bounded by a hang guard, instead of a fixed
+		// 3 s + 100 ms sleep. SimulateWindowOpenForTestsAsync already awaits the product's 3 s
+		// lifetime, so the signal is normally set by now; the wait keeps the check independent of
+		// that ordering, and only a toast that never closes reaches the 60 s guard.
+		Task winner = await Task.WhenAny(ghostClosedSignal.Task, Task.Delay(TimeSpan.FromSeconds(60)));
 
-		_ = ghostToastClosed.Should().BeTrue("ghost toast should auto-close after 3s lifetime");
+		_ = ReferenceEquals(winner, ghostClosedSignal.Task).Should().BeTrue("ghost toast should auto-close after 3s lifetime");
 
 		ghostToastShown = false;
 		await session.SimulateWindowOpenForTestsAsync();
@@ -108,12 +112,22 @@ public sealed class ToastContractTests
 		// guard far above the lifetime, and checks the lifetime separately: the close must not come
 		// BEFORE 8 s. The 50 ms slack only absorbs timer-tick rounding between the product's timer
 		// and this Stopwatch; it cannot hide a shorter lifetime.
+		//
+		// Both bounds below are measured from the show, and the lifetime they use is pinned to
+		// 8 s first, so a change to the constant cannot move the window with it. The upper bound
+		// (Lifetime + 10 s) fails a toast that closes on some other, much later timer; the 60 s
+		// guard only turns a toast that never closes into a failure.
+		_ = CleanupRecoveryToastWindow.Lifetime.Should().Be(TimeSpan.FromSeconds(8), "the cleanup recovery toast's lifetime contract is 8 s");
+
 		Task winner = await Task.WhenAny(closedSignal.Task, Task.Delay(TimeSpan.FromSeconds(60)));
 
 		_ = ReferenceEquals(winner, closedSignal.Task).Should().BeTrue("cleanup recovery toast should auto-close after 8s lifetime");
 		_ = closedAfter.Should().BeGreaterThanOrEqualTo(
 			CleanupRecoveryToastWindow.Lifetime - TimeSpan.FromMilliseconds(50),
 			"the cleanup recovery toast must stay up for its whole 8 s lifetime before it auto-closes");
+		_ = closedAfter.Should().BeLessThan(
+			CleanupRecoveryToastWindow.Lifetime + TimeSpan.FromSeconds(10),
+			"the auto-close must come from the 8 s lifetime, not from a later timer; 10 s of slack covers a loaded runner");
 	}
 
 	[Fact]
@@ -140,6 +154,7 @@ public sealed class ToastContractTests
 	{
 		bool closed = false;
 		List<Action> posted = [];
+		TaskCompletionSource postedSignal = new(TaskCreationOptions.RunContinuationsAsynchronously);
 		PickerSession session = NewSession();
 		session.DispatchPostForTests = action =>
 		{
@@ -147,13 +162,20 @@ public sealed class ToastContractTests
 			{
 				posted.Add(action);
 			}
+
+			_ = postedSignal.TrySetResult();
 		};
 		session.ConfigureClipboardHooksForTests(null, _ => { });
 		session.ConfigureToastHooksForTests(null, null, _ => { }, () => closed = true);
 
 		_ = await session.ShowForTestsAsync([new PickerKeyAction(PickerKey.Escape, 0)]);
-		await Task.Delay(CleanupRecoveryToastWindow.Lifetime.Add(TimeSpan.FromMilliseconds(500)));
 
+		// CI-load flake (r13 validation, 1 of 20 runs): a fixed Lifetime + 500 ms sleep lost the race
+		// with the product's 8 s Task.Delay continuation on a starved pool, and found nothing posted.
+		// The test now waits for the post itself, bounded by a 60 s hang guard.
+		Task winner = await Task.WhenAny(postedSignal.Task, Task.Delay(TimeSpan.FromSeconds(60)));
+
+		_ = ReferenceEquals(winner, postedSignal.Task).Should().BeTrue("the cleanup toast's close must be posted to the dispatcher once its lifetime ends");
 		_ = closed.Should().BeFalse("the close must not run on the pool thread");
 		Action close;
 		lock (posted)

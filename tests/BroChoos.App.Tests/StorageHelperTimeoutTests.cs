@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using BroChoos.App.HelperClients;
 using BroChoos.Core.Abstractions;
+using BroChoos.Platform.Windows.Tests.TestSupport;
 using FluentAssertions;
 using Xunit;
 
@@ -31,6 +32,11 @@ namespace BroChoos.App.Tests;
 // reported to the user.
 public sealed class StorageHelperTimeoutTests
 {
+	// How long the kill may take to remove the child from the process list. NOT raced against
+	// the child's own life: the gated stub never exits before its gate opens (its self-exit cap
+	// is ~30 s, three times this window). It only bounds how long a FAILING run waits.
+	private static readonly TimeSpan LivenessWindow = TimeSpan.FromSeconds(10);
+
 	// The budget the launch helper already uses. Pinned as a VALUE so a future edit cannot
 	// quietly turn the storage helper back into the unbounded path this finding is about.
 	[Fact]
@@ -132,45 +138,50 @@ public sealed class StorageHelperTimeoutTests
 	// alive 1 s after storage.helper-timeout, catalog write completed 2.64 s after it).
 	//
 	// The stub is a COPY of cmd.exe with a unique file name, so its liveness is observable
-	// through GetProcessesByName without matching any unrelated cmd.exe on the machine - the
-	// probe only sees processes whose image name is this test's own. It writes `started.txt`
-	// immediately and `late.txt` after ~6.1 s of work; the budget expires at 1.5 s.
+	// through GetProcessesByName without matching any unrelated cmd.exe on the machine. It
+	// writes `started.txt` and then waits on a GATE: it writes `late.txt` only once the test
+	// creates `release.txt`, which the test does only AFTER the runner has returned (see
+	// StubHelper). The earlier stub was a timed `ping -n 7`, so every window here was a race
+	// against its natural life; with the gate, scheduling delay can slow the test but cannot
+	// change the outcome.
 	//
-	// TWO INDEPENDENT ASSERTIONS, each of which the un-killed child fails:
-	//  1. LIVENESS inside a 2 s window. The child's natural remaining life at the timeout is
-	//     ~4.6 s, so a child that was not killed is still running when this window closes -
-	//     the window is deliberately SHORTER than that life, which is what ties the pass to
-	//     the kill rather than to the child eventually exiting on its own.
-	//  2. THE LATE WRITE, observed after the child's whole natural lifetime has elapsed. This
-	//     is the user-visible consequence: a write the user was told had failed.
+	// THREE INDEPENDENT PROOFS, each of which an un-killed child fails:
+	//  1. the runner's kill observer fired for THIS stub's pid (observed while it was gated);
+	//  2. LIVENESS: the child is gone within LivenessWindow. The gated stub never exits on its
+	//     own before release (its safety cap is ~30 s), so only the kill can end it in time;
+	//  3. THE LATE WRITE: after the gate is opened, no late.txt appears. A surviving child would
+	//     write it within one poll. This is the user-visible consequence: a write the user was
+	//     told had failed.
 	[Fact]
 	public async Task Runner_ExpiredBudget_KillsTheChild_SoNoLateWriteHappens()
 	{
 		using StubHelper stub = StubHelper.Create(CommandInterpreter());
+		int killedPid = 0;
 
-		// FLAKE FIX (observed 1 failure in 5 full runs: `stub.Started` was False). The budget
-		// must cover cmd.exe starting AND writing started.txt; 500 ms is not enough when the
-		// other test classes (which run in parallel with this one) are loading the machine.
-		// 1.5 s absorbs that start-up latency, and the stub lives long enough (see StubHelper)
-		// that the liveness window below is still shorter than its remaining life.
-		StorageHelperProcessRunner runner = new(() => stub.ExecutablePath, TimeSpan.FromMilliseconds(1500));
+		// started.txt is awaited through the beforeBudgetStartsForTests seam, BEFORE the budget
+		// exists, so the 300 ms budget can no longer race the stub's own start-up (the old
+		// "`stub.Started` was False" flake, which a 1.5 s budget only made rarer).
+		StorageHelperProcessRunner runner = new(
+			() => stub.ExecutablePath,
+			TimeSpan.FromMilliseconds(300),
+			observer: pid => killedPid = pid,
+			forcedGenericFailure: null,
+			beforeBudgetStartsForTests: stub.WaitUntilStartedAsync);
 
-		Stopwatch elapsed = Stopwatch.StartNew();
 		StorageHelperProcessResult result = await runner.RunAsync(stub.Command, "{}", CancellationToken.None);
 
 		_ = result.Started.Should().BeTrue("the child did start; only the WAIT was abandoned");
 		_ = result.ExitCode.Should().Be(124, "the budget expired, which is the typed timeout marker");
 		_ = stub.Started.Should().BeTrue("the stub must have begun work before the budget expired, or the late write would be untestable");
+		AssertTheRunnerKilledTheStub(stub, killedPid);
 
-		// 1. The child must be DEAD once the typed outcome is returned. The 2 s window absorbs
-		// kernel teardown latency (measured at ~50 ms) without reaching the child's own exit.
-		_ = (await stub.WaitForExitAsync(TimeSpan.FromSeconds(2)))
+		// 2. The child must be DEAD once the typed outcome is returned.
+		_ = (await stub.WaitForExitAsync(LivenessWindow))
 			.Should()
 			.BeTrue("the runner killed the child it abandoned; a child still running here is the orphan this test exists to catch");
 
-		// 2. The late write must never appear, observed after the child's whole natural
-		// lifetime has passed so the check cannot pass merely because the file is not due yet.
-		await StubHelper.WaitOutTheNaturalLifetimeAsync(elapsed.Elapsed);
+		// 3. Open the gate a survivor would act on; the late write must never appear.
+		await stub.ReleaseTheLateWriteAsync();
 		_ = stub.LateMarkerExists.Should().BeFalse(
 			"the abandoned child was killed, so the write it would have made after the timeout must not occur");
 	}
@@ -178,27 +189,71 @@ public sealed class StorageHelperTimeoutTests
 	// The SAME proof for the caller-cancellation path, which abandons the wait for a
 	// different reason but orphans the child identically. The typed outcome must stay what it
 	// always was (Started false, exit -1) - the kill is not allowed to change the report.
+	//
+	// The cancellation fires once started.txt exists, not on a fixed 500 ms timer that could
+	// fire before the stub had begun, so the kill is always tested against a running child.
 	[Fact]
 	public async Task Runner_CallerCancellation_KillsTheChild_WithoutChangingTheTypedOutcome()
 	{
 		using StubHelper stub = StubHelper.Create(CommandInterpreter());
+		int killedPid = 0;
 
-		StorageHelperProcessRunner runner = new(() => stub.ExecutablePath, TimeSpan.FromSeconds(30));
+		StorageHelperProcessRunner runner = new(() => stub.ExecutablePath, TimeSpan.FromSeconds(30), pid => killedPid = pid, forcedGenericFailure: null);
 
-		Stopwatch elapsed = Stopwatch.StartNew();
-		using CancellationTokenSource cancellation = new(TimeSpan.FromMilliseconds(500));
+		using CancellationTokenSource cancellation = new();
+		Task cancelOnceStarted = CancelOnceStartedAsync(stub, cancellation);
 		StorageHelperProcessResult result = await runner.RunAsync(stub.Command, "{}", cancellation.Token);
+		await cancelOnceStarted;
 
 		_ = result.Started.Should().BeFalse("a caller cancellation is not a diagnosis about the helper and keeps the existing shape");
 		_ = result.ExitCode.Should().Be(-1);
 		_ = result.StandardError.Should().Contain("helper-process-start-exception");
+		_ = stub.Started.Should().BeTrue("the stub must have begun work before the caller cancelled, or the kill would be tested against a child that never ran");
+		AssertTheRunnerKilledTheStub(stub, killedPid);
 
-		_ = (await stub.WaitForExitAsync(TimeSpan.FromSeconds(2)))
+		_ = (await stub.WaitForExitAsync(LivenessWindow))
 			.Should()
 			.BeTrue("the cancelled wait abandoned the child, so the child must be killed for the same reason as a timeout");
 
-		await StubHelper.WaitOutTheNaturalLifetimeAsync(elapsed.Elapsed);
+		await stub.ReleaseTheLateWriteAsync();
 		_ = stub.LateMarkerExists.Should().BeFalse("a cancelled exchange must not leave a child that finishes the work afterwards");
+	}
+
+	// THE POSITIVE CONTROL FOR THE GATE. The kill tests assert "killed" and "no late.txt after
+	// release"; both would pass vacuously if the stub died at once or could never write late.txt.
+	// Run with NO runner, the stub must stay alive while the gate is closed, and once release.txt
+	// exists it must write late.txt and exit on its own with 0.
+	[Fact]
+	public async Task Stub_GateIsOpenOnlyAfterRelease_StaysAliveUntilReleased_ThenWritesTheLateMarkerAndExits()
+	{
+		using StubHelper stub = StubHelper.Create(CommandInterpreter());
+		using Process child = stub.StartDirectly();
+
+		await stub.WaitUntilStartedAsync(CancellationToken.None);
+		_ = stub.Started.Should().BeTrue("the stub script must run and touch started.txt");
+		_ = stub.ObservedPid.Should().Be(child.Id, "the uniquely named image the tests watch is the process that was started");
+
+		await Task.Delay(TimeSpan.FromSeconds(1));
+		_ = child.HasExited.Should().BeFalse("with the gate closed the stub must still be running, or the kill tests' liveness check would pass without a kill");
+		_ = stub.LateMarkerExists.Should().BeFalse("the late write must wait for release.txt");
+
+		await File.WriteAllTextAsync(Path.Combine(stub.DirectoryPath, "release.txt"), "release");
+
+		using CancellationTokenSource bound = new(TimeSpan.FromSeconds(15));
+		bool exited;
+		try
+		{
+			await child.WaitForExitAsync(bound.Token);
+			exited = true;
+		}
+		catch (OperationCanceledException)
+		{
+			exited = false;
+		}
+
+		_ = exited.Should().BeTrue("a released stub must exit on its own within the bound");
+		_ = child.ExitCode.Should().Be(0, "exit 0 is the released path; 3 would mean the 30-poll cap ran out first");
+		_ = stub.LateMarkerExists.Should().BeTrue("a released, un-killed stub must perform the late write, so its absence in the kill tests means something");
 	}
 
 	// The kill must fire ONLY on the abandoned paths. A child that exits on its own still
@@ -345,26 +400,49 @@ public sealed class StorageHelperTimeoutTests
 		return commandInterpreter;
 	}
 
-	// A REAL child process that is uniquely identifiable and writes a marker AFTER the window
-	// in which the runner's budget expires. Built from a copy of cmd.exe because the runner
+	// Cancels the caller's token only once the stub has written started.txt (bounded at 10 s by
+	// WaitUntilStartedAsync), instead of on a fixed timer that could fire before the stub began.
+	private static async Task CancelOnceStartedAsync(StubHelper stub, CancellationTokenSource cancellation)
+	{
+		await stub.WaitUntilStartedAsync(CancellationToken.None);
+		await cancellation.CancelAsync();
+	}
+
+	// The kill is proven through the runner's own kill observer, which fires only right before
+	// Process.Kill on a child that has not exited, and it must be THIS stub's pid. ObservedPid is
+	// read while the stub is alive and gated and its image name is unique, so a 0 means the stub
+	// never started or the lookup was ambiguous; the comparison could not be made, so it fails.
+	private static void AssertTheRunnerKilledTheStub(StubHelper stub, int killedPid)
+	{
+		_ = killedPid.Should().NotBe(0, "the runner must have attempted the kill on the live child it abandoned; a child that merely exited on its own would leave this 0");
+		_ = stub.ObservedPid.Should().NotBe(
+			0,
+			"the stub's pid must have been observed while it was alive and gated, otherwise the test cannot prove the runner killed THIS stub and no other process");
+		_ = killedPid.Should().Be(stub.ObservedPid, "the runner must kill this test's stub and no other process");
+	}
+
+	// A REAL child process that is uniquely identifiable and whose late write is GATED: it
+	// touches started.txt, then waits for a release.txt that only the test creates, and only
+	// after that writes late.txt. The same design as HelperTimeoutKillTests.StubHelper (the
+	// launch and network runners' kill tests). Built from a copy of cmd.exe because the runner
 	// starts its child from a path, and a copied image is the one way to make "is THIS child
 	// still running?" answerable without matching an unrelated cmd.exe.
 	//
-	// The stub's own lifetime is a contract of the test, not an incidental detail: the liveness
-	// window (2 s) and the late-write window are both chosen against it, and `Started` guards
-	// against the stub finishing before the budget expires - if that ever happened the test
-	// would fail loudly rather than pass vacuously.
+	// The stub never exits on its own before the gate opens (apart from its ~30 s safety cap),
+	// so the liveness check can only pass through the kill, and a late.txt after the release can
+	// only come from a child that survived the kill. `Started` guards against a stub that never
+	// began; Stub_GateIsOpenOnlyAfterRelease proves the gate works, so the "no late.txt"
+	// assertions cannot pass vacuously.
 	private sealed class StubHelper : IDisposable
 	{
 		private const string StartedMarkerFileName = "started.txt";
 		private const string LateMarkerFileName = "late.txt";
+		private const string ReleaseMarkerFileName = "release.txt";
+		private const string ScriptFileName = "gate.cmd";
 
-		// `ping -n 7` waits six one-second intervals, ~6.1 s. The declared lifetime is the
-		// conservative UPPER bound (7 s), so "the late write is due by now" cannot be claimed
-		// before the stub could possibly have written it. It was `-n 5` / 5 s with a 500 ms
-		// budget; the longer life keeps >= 4.5 s of it remaining after the 1.5 s budget, so the
-		// 2 s liveness window stays well inside the child's natural life.
-		private static readonly TimeSpan NaturalLifetime = TimeSpan.FromSeconds(7);
+		// A surviving child polls for release.txt about once a second (`ping -n 2`), so this
+		// covers more than two polls. It only delays the check; it is not raced against the kill.
+		private static readonly TimeSpan ReleasedChildReactionBound = TimeSpan.FromMilliseconds(2500);
 
 		private StubHelper(string directoryPath, string executablePath, string processName, string command)
 		{
@@ -381,6 +459,9 @@ public sealed class StorageHelperTimeoutTests
 		public string ProcessName { get; }
 
 		public string Command { get; }
+
+		// The pid of this stub's child, read when started.txt was first observed (0 if never).
+		public int ObservedPid { get; private set; }
 
 		public bool Started => File.Exists(Path.Combine(DirectoryPath, StartedMarkerFileName));
 
@@ -399,25 +480,82 @@ public sealed class StorageHelperTimeoutTests
 			string executablePath = Path.Combine(directoryPath, processName + ".exe");
 			File.Copy(commandInterpreter, executablePath);
 
-			// Passed as ONE argument (ArgumentList), exactly as the runner does it, so the
-			// stub's invocation shape cannot differ from the real helper's. Relative marker
-			// paths resolve against the runner's WorkingDirectory, which is the stub's own
-			// directory because that is where the executable lives.
-			string command = $"/c echo started> {StartedMarkerFileName} & ping -n 7 127.0.0.1 >nul & echo late> {LateMarkerFileName}";
+			// THE GATE, as a batch FILE: nothing is nested inside the single ArgumentList
+			// argument, and cmd runs the file in-process, so the copied image is still the process
+			// the tests look for (ping is its child, which the runner's tree kill also ends).
+			// After started.txt it polls (about once a second) for release.txt and writes late.txt
+			// ONLY once it exists. The loop is capped at 30 polls (~30 s) and at the cap it exits 3
+			// WITHOUT the late write. %~dp0 anchors every marker to the stub's own directory.
+			string script = string.Join(
+				"\r\n",
+				"@echo off",
+				$"echo started> \"%~dp0{StartedMarkerFileName}\"",
+				"for /l %%i in (1,1,30) do (",
+				$"\tif exist \"%~dp0{ReleaseMarkerFileName}\" (",
+				$"\t\techo late> \"%~dp0{LateMarkerFileName}\"",
+				"\t\texit 0",
+				"\t)",
+				"\tping -n 2 127.0.0.1 >nul",
+				")",
+				"exit 3",
+				string.Empty);
+			File.WriteAllText(Path.Combine(directoryPath, ScriptFileName), script);
+
+			// ONE argument (ArgumentList), exactly as the runner does it, with no space, so cmd
+			// sees no quote at all. The script resolves against the runner's WorkingDirectory
+			// (the stub's own directory). The explicit `.\` makes it a relative PATH rather than a
+			// bare name, so it still runs when NoDefaultCurrentDirectoryInExePath is set.
+			string command = $"/c.\\{ScriptFileName}";
 
 			return new StubHelper(directoryPath, executablePath, processName, command);
 		}
 
-		// Waits until the stub's whole natural lifetime has elapsed SINCE IT STARTED, measured
-		// against the caller's stopwatch. Checking the late marker earlier would be able to
-		// pass simply because the write was not due yet; this makes the check conclusive.
-		public static async Task WaitOutTheNaturalLifetimeAsync(TimeSpan alreadyElapsed)
+		// Waits for started.txt, bounded at 10 s, and records the child's pid. It returns either
+		// way; a stub that never started then fails the test's own `stub.Started` assertion.
+		public async Task WaitUntilStartedAsync(CancellationToken cancellationToken)
 		{
-			TimeSpan remaining = NaturalLifetime - alreadyElapsed;
-			if (remaining > TimeSpan.Zero)
+			DateTimeOffset deadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(10);
+			while (!Started && DateTimeOffset.UtcNow < deadline)
 			{
-				await Task.Delay(remaining);
+				await Task.Delay(20, cancellationToken);
 			}
+
+			if (Started)
+			{
+				Process[] running = Process.GetProcessesByName(ProcessName);
+				try
+				{
+					ObservedPid = running.Length == 1 ? running[0].Id : 0;
+				}
+				finally
+				{
+					foreach (Process process in running)
+					{
+						process.Dispose();
+					}
+				}
+			}
+		}
+
+		// Starts the stub directly, with no runner, the same way the runner does.
+		public Process StartDirectly()
+		{
+			ProcessStartInfo startInfo = new()
+			{
+				FileName = ExecutablePath,
+				UseShellExecute = false,
+				CreateNoWindow = true,
+				WorkingDirectory = DirectoryPath,
+			};
+			startInfo.ArgumentList.Add(Command);
+			return Process.Start(startInfo) ?? throw new InvalidOperationException("the stub did not start");
+		}
+
+		// Opens the gate, then gives a SURVIVING child more than two of its polls to act on it.
+		public async Task ReleaseTheLateWriteAsync()
+		{
+			await File.WriteAllTextAsync(Path.Combine(DirectoryPath, ReleaseMarkerFileName), "release");
+			await Task.Delay(ReleasedChildReactionBound);
 		}
 
 		// Bounded: returns whether the child is gone within the window, so a failure reports
@@ -441,26 +579,24 @@ public sealed class StorageHelperTimeoutTests
 
 		private bool IsRunning()
 		{
-			return Process.GetProcessesByName(ProcessName).Length > 0;
+			Process[] running = Process.GetProcessesByName(ProcessName);
+			foreach (Process process in running)
+			{
+				process.Dispose();
+			}
+
+			return running.Length > 0;
 		}
 
-		// The executable is deleted on dispose, but a killed child's image can be briefly
-		// locked; a failed delete must not fail the test that already proved its point.
+		// Cleanup that runs however the test ended. The old Dispose only deleted the folder, so a
+		// live stub (a failing run, or the generic-failure test, whose kill is observed but not
+		// awaited) kept its image locked, the folder leaked, and late.txt could be written after
+		// the test. A survivor is now killed first, verified by its pinned handle and full image
+		// path (TestTempCleanup.KillSurvivors), then the folder goes with one short retry.
 		public void Dispose()
 		{
-			try
-			{
-				if (Directory.Exists(DirectoryPath))
-				{
-					Directory.Delete(DirectoryPath, recursive: true);
-				}
-			}
-			catch (IOException)
-			{
-			}
-			catch (UnauthorizedAccessException)
-			{
-			}
+			TestTempCleanup.KillSurvivors(ExecutablePath);
+			TestTempCleanup.DeleteDirectory(DirectoryPath);
 		}
 	}
 
@@ -498,24 +634,13 @@ public sealed class StorageHelperTimeoutTests
 			return new FastExitStub(directoryPath, executablePath);
 		}
 
-		// The executable is deleted on dispose, but a child that exits milliseconds before the
-		// delete can still hold its image briefly; a failed delete must not fail a test that
-		// already proved its point.
+		// A survivor from this image (verified by its full path) is killed first, then the folder
+		// is deleted with one short retry: a child that exits milliseconds before the delete can
+		// still hold its image briefly. A failed cleanup must not fail a test that proved its point.
 		public void Dispose()
 		{
-			try
-			{
-				if (Directory.Exists(DirectoryPath))
-				{
-					Directory.Delete(DirectoryPath, recursive: true);
-				}
-			}
-			catch (IOException)
-			{
-			}
-			catch (UnauthorizedAccessException)
-			{
-			}
+			TestTempCleanup.KillSurvivors(ExecutablePath);
+			TestTempCleanup.DeleteDirectory(DirectoryPath);
 		}
 	}
 

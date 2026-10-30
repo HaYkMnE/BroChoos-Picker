@@ -4,6 +4,7 @@ using System.Net.Sockets;
 using System.Text;
 using BroChoos.Core.Abstractions;
 using BroChoos.NetworkHelper;
+using BroChoos.Platform.Windows.Tests.TestSupport;
 using FluentAssertions;
 using Xunit;
 
@@ -104,9 +105,11 @@ public sealed class ShortLinkPacketTranscriptEvidenceTests
 		}
 		finally
 		{
-			if (!regenerateEvidence && Directory.Exists(directory))
+			if (!regenerateEvidence)
 			{
-				Directory.Delete(directory, recursive: true);
+				// Best effort: the per-run folder, then the fixed parent once it is empty.
+				TestTempCleanup.DeleteDirectory(directory);
+				TestTempCleanup.DeleteDirectoryIfEmpty(Path.GetDirectoryName(directory)!);
 			}
 		}
 	}

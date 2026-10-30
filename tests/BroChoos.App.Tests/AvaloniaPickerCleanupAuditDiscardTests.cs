@@ -1,5 +1,6 @@
 using BroChoos.App.Audit;
 using BroChoos.App.Picker;
+using BroChoos.Platform.Windows.Tests.TestSupport;
 using FluentAssertions;
 using Microsoft.Extensions.Logging;
 using Xunit;
@@ -114,7 +115,8 @@ public sealed class AvaloniaPickerCleanupAuditDiscardTests
 		}
 		finally
 		{
-			Directory.Delete(root, recursive: true);
+			TestTempCleanup.DeleteDirectory(root);
+			TestTempCleanup.DeleteDirectoryIfEmpty(Path.GetDirectoryName(root)!);
 		}
 	}
 

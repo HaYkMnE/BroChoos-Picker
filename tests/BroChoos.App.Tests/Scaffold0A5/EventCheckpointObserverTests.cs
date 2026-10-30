@@ -108,6 +108,12 @@ public sealed class EventCheckpointObserverTests
 			// A failed assertion above must not leave OnStage parked on a pool thread for the
 			// 10-minute ReleasablePark. Setting an already-set manual-reset event is harmless.
 			_ = proceed.Set();
+
+			// Then wait, bounded, for the released park to actually return, so the observer and
+			// its event handles are not disposed (by the using declarations) under a call that is
+			// still inside OnStage. On the passing path the park has already completed. The result
+			// is not asserted here: a throw from a finally would hide the original failure.
+			_ = await Task.WhenAny(park, Task.Delay(HangGuard));
 		}
 	}
 

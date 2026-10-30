@@ -1,5 +1,6 @@
 using BroChoos.App.Audit;
 using BroChoos.Core.Routing;
+using BroChoos.Platform.Windows.Tests.TestSupport;
 using FluentAssertions;
 using Xunit;
 using System.Globalization;
@@ -37,6 +38,8 @@ public sealed class TrackingCleanupAuditWriterConcurrencyTests
 			{
 				Directory.Delete(testRoot, recursive: true);
 			}
+
+			TestTempCleanup.DeleteDirectoryIfEmpty(Path.GetDirectoryName(testRoot)!);
 		}
 
 		await Task.CompletedTask;
@@ -102,6 +105,8 @@ public sealed class TrackingCleanupAuditWriterConcurrencyTests
 			{
 				Directory.Delete(testRoot, recursive: true);
 			}
+
+			TestTempCleanup.DeleteDirectoryIfEmpty(Path.GetDirectoryName(testRoot)!);
 		}
 	}
 
@@ -163,6 +168,8 @@ public sealed class TrackingCleanupAuditWriterConcurrencyTests
 			{
 				Directory.Delete(testRoot, recursive: true);
 			}
+
+			TestTempCleanup.DeleteDirectoryIfEmpty(Path.GetDirectoryName(testRoot)!);
 		}
 	}
 
@@ -212,6 +219,8 @@ public sealed class TrackingCleanupAuditWriterConcurrencyTests
 			{
 				Directory.Delete(testRoot, recursive: true);
 			}
+
+			TestTempCleanup.DeleteDirectoryIfEmpty(Path.GetDirectoryName(testRoot)!);
 		}
 	}
 
@@ -271,6 +280,8 @@ public sealed class TrackingCleanupAuditWriterConcurrencyTests
 			{
 				Directory.Delete(testRoot, recursive: true);
 			}
+
+			TestTempCleanup.DeleteDirectoryIfEmpty(Path.GetDirectoryName(testRoot)!);
 		}
 	}
 
@@ -319,6 +330,8 @@ public sealed class TrackingCleanupAuditWriterConcurrencyTests
 			{
 				Directory.Delete(testRoot, recursive: true);
 			}
+
+			TestTempCleanup.DeleteDirectoryIfEmpty(Path.GetDirectoryName(testRoot)!);
 		}
 	}
 
@@ -363,6 +376,8 @@ public sealed class TrackingCleanupAuditWriterConcurrencyTests
 			{
 				Directory.Delete(testRoot, recursive: true);
 			}
+
+			TestTempCleanup.DeleteDirectoryIfEmpty(Path.GetDirectoryName(testRoot)!);
 		}
 	}
 

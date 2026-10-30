@@ -138,6 +138,12 @@ internal sealed class StorageHelperProcessRunner : IStorageHelperProcessRunner
 
 	private readonly Exception? _forcedGenericFailureForTests;
 
+	// TEST SEAM, the same one LaunchHelperProcessRunner and NetworkHelperProcessRunner carry:
+	// awaited after Process.Start and BEFORE the budget's token source exists, so a test can
+	// wait for its stub child to reach a known state without that wait being charged to the
+	// budget. Null in production: no extra await, and the budget starts where it always did.
+	private readonly Func<CancellationToken, Task>? _beforeBudgetStartsForTests;
+
 	public StorageHelperProcessRunner()
 		: this(ResolveHelperPath, DefaultTimeout, observer: null, forcedGenericFailure: null)
 	{
@@ -152,12 +158,14 @@ internal sealed class StorageHelperProcessRunner : IStorageHelperProcessRunner
 		Func<string?> resolveHelperPath,
 		TimeSpan timeout,
 		Action<int>? observer,
-		Exception? forcedGenericFailure)
+		Exception? forcedGenericFailure,
+		Func<CancellationToken, Task>? beforeBudgetStartsForTests = null)
 	{
 		_resolveHelperPath = resolveHelperPath;
 		Timeout = timeout;
 		_killObserver = observer ?? (static _ => { });
 		_forcedGenericFailureForTests = forcedGenericFailure;
+		_beforeBudgetStartsForTests = beforeBudgetStartsForTests;
 	}
 
 	public async Task<StorageHelperProcessResult> RunAsync(string command, string requestPayload, CancellationToken cancellationToken)
@@ -202,6 +210,11 @@ internal sealed class StorageHelperProcessRunner : IStorageHelperProcessRunner
 			if (process is null)
 			{
 				return new StorageHelperProcessResult(false, -1, string.Empty, "helper-process-not-started");
+			}
+
+			if (_beforeBudgetStartsForTests is { } beforeBudget)
+			{
+				await beforeBudget(CancellationToken.None);
 			}
 
 			// The budget covers the WHOLE exchange, not just the exit: a helper that stalls

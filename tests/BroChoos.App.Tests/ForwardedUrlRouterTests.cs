@@ -158,6 +158,13 @@ public sealed class ForwardedUrlRouterTests
 	// WaitNamedPipe answers "is an instance of this pipe waiting for a client?" without connecting,
 	// so it consumes nothing. While no instance exists it returns false at once (file not found),
 	// hence the short pause between probes. The pipe name must stay identical to the guard's.
+	// It is rebuilt here rather than read from the product because the guard's name is private
+	// and BroChoos.Platform.Windows grants InternalsVisibleTo only to Platform.Windows.Tests and
+	// Security.Tests, not to this assembly; a shared internal helper would need a new grant.
+	//
+	// These tests use the REAL per-user names (NewGuard has no name seam: the constructor derives
+	// the mutex and pipe from the user SID), which is why the class sits in the serial
+	// console-capture collection and probes SharedGuardMutex before creating a primary.
 	private static bool PipeIsListening(TimeSpan timeout)
 	{
 		string sid = WindowsIdentity.GetCurrent().User?.Value ?? "anon";

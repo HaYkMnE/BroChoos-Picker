@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using BroChoos.Platform.Windows.Browsers;
 using BroChoos.Platform.Windows.Network;
+using BroChoos.Platform.Windows.Tests.TestSupport;
 using FluentAssertions;
 using Xunit;
 
@@ -530,23 +531,13 @@ public sealed class HelperTimeoutKillTests
 			return running.Length > 0;
 		}
 
-		// A child that exits milliseconds before the delete can still hold its image briefly;
-		// a failed delete must not fail a test that already proved its point.
+		// A survivor from this image (verified by full path) is killed first, then the folder is
+		// deleted with one short retry: a child that exits milliseconds before the delete can
+		// still hold its image briefly. A failed cleanup must not fail a test that proved its point.
 		public void Dispose()
 		{
-			try
-			{
-				if (Directory.Exists(DirectoryPath))
-				{
-					Directory.Delete(DirectoryPath, recursive: true);
-				}
-			}
-			catch (IOException)
-			{
-			}
-			catch (UnauthorizedAccessException)
-			{
-			}
+			TestTempCleanup.KillSurvivors(ExecutablePath);
+			TestTempCleanup.DeleteDirectory(DirectoryPath);
 		}
 	}
 
@@ -572,13 +563,12 @@ public sealed class HelperTimeoutKillTests
 		// covers more than two polls. It only delays the check; it is not raced against the kill.
 		private static readonly TimeSpan ReleasedChildReactionBound = TimeSpan.FromMilliseconds(2500);
 
-		private StubHelper(string directoryPath, string executablePath, string processName, string command, DateTime createdAt)
+		private StubHelper(string directoryPath, string executablePath, string processName, string command)
 		{
 			DirectoryPath = directoryPath;
 			ExecutablePath = executablePath;
 			ProcessName = processName;
 			Command = command;
-			CreatedAt = createdAt;
 		}
 
 		public string DirectoryPath { get; }
@@ -588,10 +578,6 @@ public sealed class HelperTimeoutKillTests
 		public string ProcessName { get; }
 
 		public string Command { get; }
-
-		// Local time (the clock Process.StartTime reports in), taken before the image exists, so
-		// every process started from this stub's image has a StartTime at or after it.
-		public DateTime CreatedAt { get; }
 
 		// The pid of this stub's child, read when started.txt was first observed (0 if never).
 		public int ObservedPid { get; private set; }
@@ -603,7 +589,6 @@ public sealed class HelperTimeoutKillTests
 		public static StubHelper Create(string commandInterpreter)
 		{
 			// Under the test process's temp directory, never the repository (P8).
-			DateTime createdAt = DateTime.Now;
 			string directoryPath = Path.Combine(Path.GetTempPath(), "brochoos-helper-orphan-" + Guid.NewGuid().ToString("N")[..12]);
 			_ = Directory.CreateDirectory(directoryPath);
 
@@ -646,7 +631,7 @@ public sealed class HelperTimeoutKillTests
 			// implicitly and the stub still runs when NoDefaultCurrentDirectoryInExePath is set.
 			string command = $"/c.\\{ScriptFileName}";
 
-			return new StubHelper(directoryPath, executablePath, processName, command, createdAt);
+			return new StubHelper(directoryPath, executablePath, processName, command);
 		}
 
 		// Waits for started.txt, bounded at 10 s, and records the child's pid. Used as the
@@ -732,57 +717,16 @@ public sealed class HelperTimeoutKillTests
 		}
 
 		// Cleanup that runs however the test ended. A stub the kill missed (a FAILING run) is
-		// reaped here by its unique image name, so it does not live out its 30 s cap; then the
-		// temp directory goes. A killed child's image can be briefly locked, so a failed delete
-		// is tolerated: it must not fail a test that has already proved its point.
+		// reaped here, so it does not live out its 30 s cap; then the temp directory goes, with
+		// one short retry for an image a just-killed child still holds. A failed cleanup never
+		// fails a test that has already proved its point.
 		//
-		// PID REUSE. GetProcessesByName returns pids, and Kill opens a pid again later. A process
-		// is only acted on when its StartTime is at or after CreatedAt: a process that reused the
-		// pid of an exited stub would also need this test's unique image name, and any process
-		// older than the stub cannot be one of its children. StartTime and Kill each open the pid
-		// separately, so a pid freed and reused in the microseconds between them is not excluded;
-		// that window is the residual, and it needs a new process to win the same pid in it.
+		// The reap acts only on a process whose handle is pinned and whose image is this stub's
+		// own full path, so a reused pid can never be killed (TestTempCleanup.KillSurvivors).
 		public void Dispose()
 		{
-			try
-			{
-				foreach (Process process in Process.GetProcessesByName(ProcessName))
-				{
-					try
-					{
-						if (process.StartTime >= CreatedAt)
-						{
-							process.Kill(entireProcessTree: true);
-							_ = process.WaitForExit(5000);
-						}
-					}
-					catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception or NotSupportedException or AggregateException)
-					{
-						// AggregateException: Kill(entireProcessTree: true) reports failures to end
-						// individual descendants (for example a ping that already exited) this way.
-					}
-					finally
-					{
-						process.Dispose();
-					}
-				}
-			}
-			finally
-			{
-				try
-				{
-					if (Directory.Exists(DirectoryPath))
-					{
-						Directory.Delete(DirectoryPath, recursive: true);
-					}
-				}
-				catch (IOException)
-				{
-				}
-				catch (UnauthorizedAccessException)
-				{
-				}
-			}
+			TestTempCleanup.KillSurvivors(ExecutablePath);
+			TestTempCleanup.DeleteDirectory(DirectoryPath);
 		}
 	}
 }

@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Reflection;
 using FluentAssertions;
 using Xunit;
@@ -94,6 +95,14 @@ public sealed class AvaloniaUiTestFramework(IMessageSink messageSink) : XunitTes
 
 		protected override async Task<RunSummary> RunTestCollectionAsync(IMessageBus messageBus, ITestCollection testCollection, IEnumerable<IXunitTestCase> testCases, CancellationTokenSource cancellationTokenSource)
 		{
+			// The console-capture collection runs on the pool as before, but through runners that
+			// bound EACH test (BoundedMethodRunner below), so a test that hangs while holding the
+			// CultureGate is reported by name instead of stalling the collection without limit.
+			if (string.Equals(testCollection.CollectionDefinition?.Name, typeof(ConsoleCaptureCollection).FullName, StringComparison.Ordinal))
+			{
+				return await new BoundedCollectionRunner(testCollection, testCases, DiagnosticMessageSink, messageBus, TestCaseOrderer, new ExceptionAggregator(Aggregator), cancellationTokenSource).RunAsync();
+			}
+
 			if (!string.Equals(testCollection.CollectionDefinition?.Name, typeof(AvaloniaUiCollection).FullName, StringComparison.Ordinal))
 			{
 				return await base.RunTestCollectionAsync(messageBus, testCollection, testCases, cancellationTokenSource);
@@ -228,6 +237,188 @@ public sealed class AvaloniaUiTestFramework(IMessageSink messageSink) : XunitTes
 			}
 		}
 
+		// THE PER-TEST BOUND FOR THE console-capture COLLECTION (L-1). CultureGate bounds how long a
+		// WAITER waits, but nothing bounded the HOLDER: a console-capture test that hung while
+		// holding the gate stalled its collection until the CI job was cancelled. These three
+		// runners are xUnit's own (XunitTestCollectionRunner -> XunitTestClassRunner ->
+		// XunitTestMethodRunner) with one change at the bottom: each test case runs against
+		// ConsoleCaptureTestBound.Timeout. When it expires, the hung test is reported as FAILED BY
+		// NAME, its later messages are dropped (TestCaseCutoffBus), the gate is poisoned so every
+		// later gated test fails at once, and the collection moves on. Scheduling is unchanged: the
+		// collection still runs on the pool, one test at a time, in parallel with avalonia-ui.
+		private sealed class BoundedCollectionRunner(
+			ITestCollection collection,
+			IEnumerable<IXunitTestCase> collectionTestCases,
+			IMessageSink diagnostics,
+			IMessageBus bus,
+			ITestCaseOrderer orderer,
+			ExceptionAggregator collectionAggregator,
+			CancellationTokenSource cancellation)
+			: XunitTestCollectionRunner(collection, collectionTestCases, diagnostics, bus, orderer, collectionAggregator, cancellation)
+		{
+			protected override Task<RunSummary> RunTestClassAsync(ITestClass testClass, IReflectionTypeInfo @class, IEnumerable<IXunitTestCase> testCases)
+			{
+				return new BoundedClassRunner(testClass, @class, testCases, DiagnosticMessageSink, MessageBus, TestCaseOrderer, new ExceptionAggregator(Aggregator), CancellationTokenSource, CollectionFixtureMappings).RunAsync();
+			}
+		}
+
+		private sealed class BoundedClassRunner(
+			ITestClass ownerClass,
+			IReflectionTypeInfo ownerClassInfo,
+			IEnumerable<IXunitTestCase> classTestCases,
+			IMessageSink diagnostics,
+			IMessageBus bus,
+			ITestCaseOrderer orderer,
+			ExceptionAggregator classAggregator,
+			CancellationTokenSource cancellation,
+			IDictionary<Type, object> collectionFixtures)
+			: XunitTestClassRunner(ownerClass, ownerClassInfo, classTestCases, diagnostics, bus, orderer, classAggregator, cancellation, collectionFixtures)
+		{
+			protected override Task<RunSummary> RunTestMethodAsync(ITestMethod testMethod, IReflectionMethodInfo method, IEnumerable<IXunitTestCase> testCases, object[] constructorArguments)
+			{
+				return new BoundedMethodRunner(testMethod, Class, method, testCases, DiagnosticMessageSink, MessageBus, new ExceptionAggregator(Aggregator), CancellationTokenSource, constructorArguments).RunAsync();
+			}
+		}
+
+		private sealed class BoundedMethodRunner(
+			ITestMethod ownerMethod,
+			IReflectionTypeInfo ownerClassInfo,
+			IReflectionMethodInfo ownerMethodInfo,
+			IEnumerable<IXunitTestCase> methodTestCases,
+			IMessageSink diagnostics,
+			IMessageBus bus,
+			ExceptionAggregator methodAggregator,
+			CancellationTokenSource cancellation,
+			object[] classConstructorArguments)
+			: XunitTestMethodRunner(ownerMethod, ownerClassInfo, ownerMethodInfo, methodTestCases, diagnostics, bus, methodAggregator, cancellation, classConstructorArguments)
+		{
+			protected override async Task<RunSummary> RunTestCaseAsync(IXunitTestCase testCase)
+			{
+				// The base runs the case as testCase.RunAsync(..., MessageBus, ...), reading MessageBus
+				// synchronously at the call. Swapping in the per-case cutoff bus around that call is
+				// therefore exact, and safe because a method runner runs its cases one after another.
+				// The flag flows (AsyncLocal) into the test, where the guard test reads it.
+				TestCaseCutoffBus caseBus = new(MessageBus);
+				IMessageBus original = MessageBus;
+				Stopwatch elapsed = Stopwatch.StartNew();
+				ConsoleCaptureTestBound.Active = true;
+				Task<RunSummary> run;
+				try
+				{
+					MessageBus = caseBus;
+					run = base.RunTestCaseAsync(testCase);
+				}
+				finally
+				{
+					MessageBus = original;
+				}
+
+				try
+				{
+					return await run.WaitAsync(ConsoleCaptureTestBound.Timeout).ConfigureAwait(false);
+				}
+				catch (TimeoutException)
+				{
+					if (caseBus.Close())
+					{
+						// The case reported TestCaseFinished in the instant before the cutoff, so it is
+						// not hung: its own result stands.
+						return await run.ConfigureAwait(false);
+					}
+
+					return ReportHung(testCase, caseBus, original, (decimal)elapsed.Elapsed.TotalSeconds);
+				}
+			}
+
+			private static RunSummary ReportHung(IXunitTestCase testCase, TestCaseCutoffBus caseBus, IMessageBus target, decimal seconds)
+			{
+				string name = testCase.DisplayName;
+				string? holder = CultureGate.Holder;
+				if (holder is not null)
+				{
+					CultureGate.PoisonedBy ??= holder;
+				}
+
+				TimeoutException hung = new(
+					$"The console-capture test '{name}' did not finish within {ConsoleCaptureTestBound.Timeout.TotalMinutes} minutes; it is hung (CultureGate holder: {holder ?? "none"}). It keeps running in the background, its later output is discarded, and every later CultureGate waiter fails at once.");
+
+				// Whatever the hung case already reported stays; the rest of its message sequence is
+				// completed here so the runner sees one balanced, failed test.
+				ITest test = caseBus.StartedTest ?? new XunitTest(testCase, name);
+				if (!caseBus.SawCaseStarting)
+				{
+					_ = target.QueueMessage(new TestCaseStarting(testCase));
+				}
+
+				if (caseBus.StartedTest is null)
+				{
+					_ = target.QueueMessage(new TestStarting(test));
+				}
+
+				_ = target.QueueMessage(new TestFailed(test, seconds, string.Empty, hung));
+				_ = target.QueueMessage(new TestFinished(test, seconds, string.Empty));
+				_ = target.QueueMessage(new TestCaseFinished(testCase, seconds, 1, 1, 0));
+				return new RunSummary { Total = 1, Failed = 1, Time = seconds };
+			}
+		}
+
+		// Forwards one test case's messages until Close and remembers how far the case got, so a
+		// hung case can be completed with exactly the messages it has not sent. After Close every
+		// message is dropped and true is returned (a false return would cancel the whole run).
+		private sealed class TestCaseCutoffBus(IMessageBus inner) : IMessageBus
+		{
+			private readonly Lock gate = new();
+			private bool closed;
+			private bool finished;
+
+			internal bool SawCaseStarting { get; private set; }
+
+			internal ITest? StartedTest { get; private set; }
+
+			public bool QueueMessage(IMessageSinkMessage message)
+			{
+				lock (gate)
+				{
+					if (closed)
+					{
+						return true;
+					}
+
+					switch (message)
+					{
+						case ITestCaseStarting:
+							SawCaseStarting = true;
+							break;
+						case ITestStarting starting:
+							StartedTest = starting.Test;
+							break;
+						case ITestCaseFinished:
+							finished = true;
+							break;
+						default:
+							break;
+					}
+
+					return inner.QueueMessage(message);
+				}
+			}
+
+			// Returns whether the case had already finished; either way nothing passes afterwards.
+			internal bool Close()
+			{
+				lock (gate)
+				{
+					closed = true;
+					return finished;
+				}
+			}
+
+			// The inner bus belongs to the collection runner.
+			public void Dispose()
+			{
+			}
+		}
+
 		private static InvalidOperationException? TakeEscapedFailures()
 		{
 			List<string> texts = [];
@@ -246,9 +437,18 @@ public sealed class AvaloniaUiTestFramework(IMessageSink messageSink) : XunitTes
 
 internal static class AvaloniaUiThread
 {
-	// The whole collection takes well under a minute locally. ci.yml gives the test job 30 minutes
-	// and test-debug 40 (timeout-minutes), so a hung collection is reported here as a collection
-	// failure whose message names the avalonia-ui collection, before either job is cancelled.
+	// The whole collection takes well under a minute locally. A hung collection is reported here
+	// as a collection failure naming the avalonia-ui collection, 15 minutes after the collection
+	// STARTED. ci.yml gives the test job 30 minutes and test-debug 40 (timeout-minutes), counted
+	// from the start of the JOB. In run 41051054418 the tests started 2 min 30 s (test) and
+	// 1 min 47 s (test-debug) into the job, after checkout, restore and build, and other test
+	// assemblies run before or alongside this one. So the report reaches the log before the job
+	// is cancelled only if this collection starts less than 15 minutes (test) or 25 minutes
+	// (test-debug) after the job did; nothing here guarantees that, so it is not a promise.
+	// What bounds a hang in a gated test: the gate HOLDER is bounded per test in console-capture
+	// (ConsoleCaptureTestBound, 5 minutes) and per collection here (CollectionTimeout); a WAITER
+	// gives up after CultureGate.Timeout (10 minutes); and once either bound fires, every later
+	// gated test fails at once (CultureGate.PoisonedBy) instead of waiting another 10 minutes.
 	internal static readonly TimeSpan CollectionTimeout = TimeSpan.FromMinutes(15);
 
 	// Setup plus the first PickerWindow takes about a second locally.
@@ -463,6 +663,24 @@ internal static class AvaloniaUiThread
 	}
 }
 
+// The per-test bound applied to the console-capture collection by AvaloniaUiTestFramework
+// (BoundedMethodRunner). The slowest console-capture test takes about 10 s under the CI-load
+// simulation (the 8 s toast lifetime plus scheduling); 5 minutes is far above that, and below
+// CultureGate.Timeout, so a hung holder is reported by name before a waiter gives up on it.
+internal static class ConsoleCaptureTestBound
+{
+	internal static readonly TimeSpan Timeout = TimeSpan.FromMinutes(5);
+
+	private static readonly AsyncLocal<bool> ActiveFlag = new();
+
+	// True inside a test that runs under the bound; the guard test below fails if it is not.
+	internal static bool Active
+	{
+		get => ActiveFlag.Value;
+		set => ActiveFlag.Value = value;
+	}
+}
+
 // GUARDS: the mechanism only holds if the framework above is the one xUnit runs and it routes
 // exactly this collection to the dedicated thread.
 [Collection(AvaloniaUiCollection.Name)]
@@ -495,6 +713,13 @@ public sealed class AvaloniaUiThreadConsoleCaptureGuardTests
 	public void TestsOutsideTheAvaloniaUiCollection_NeverRunOnTheUiThread()
 	{
 		_ = AvaloniaUiThread.IsCurrent.Should().BeFalse("only the avalonia-ui collection may run on the thread that owns the Avalonia dispatcher");
+	}
+
+	[Fact]
+	public void TestsInTheConsoleCaptureCollection_RunUnderThePerTestBound()
+	{
+		_ = ConsoleCaptureTestBound.Active.Should().BeTrue("AvaloniaUiTestFramework must run every console-capture test through BoundedMethodRunner, so a test that hangs while holding the CultureGate is reported by name");
+		_ = ConsoleCaptureTestBound.Timeout.Should().BeLessThan(CultureGate.Timeout, "the holder must be reported before a waiter gives up on the gate");
 	}
 
 	[Fact]

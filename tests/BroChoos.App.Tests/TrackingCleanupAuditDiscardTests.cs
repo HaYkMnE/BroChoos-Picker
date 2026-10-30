@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using BroChoos.App.Audit;
+using BroChoos.Platform.Windows.Tests.TestSupport;
 using FluentAssertions;
 using Xunit;
 
@@ -176,6 +177,9 @@ public sealed class TrackingCleanupAuditDiscardTests : IDisposable
 		{
 			// Best-effort temp cleanup.
 		}
+
+		// The fixed parent goes once the last per-test folder is gone; best effort, never throws.
+		TestTempCleanup.DeleteDirectoryIfEmpty(Path.GetDirectoryName(_root)!);
 	}
 
 	private static bool CreateJunction(string link, string target)
