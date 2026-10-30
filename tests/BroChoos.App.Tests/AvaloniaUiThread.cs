@@ -334,7 +334,8 @@ public sealed class AvaloniaUiTestFramework(IMessageSink messageSink) : XunitTes
 						return await run.ConfigureAwait(false);
 					}
 
-					bool heldTooLong = clock.HeldFor > ConsoleCaptureTestBound.Timeout;
+					(TimeSpan HeldFor, string? Name, long Epoch) held = clock.Snapshot();
+					bool heldTooLong = held.HeldFor > ConsoleCaptureTestBound.Timeout;
 					bool ranTooLong = elapsed.Elapsed > ConsoleCaptureTestBound.OverallTimeout;
 					if (!heldTooLong && !ranTooLong)
 					{
@@ -348,21 +349,23 @@ public sealed class AvaloniaUiTestFramework(IMessageSink messageSink) : XunitTes
 						return await run.ConfigureAwait(false);
 					}
 
-					return ReportHung(testCase, caseBus, original, clock, heldTooLong, (decimal)elapsed.Elapsed.TotalSeconds);
+					return ReportHung(testCase, caseBus, original, heldTooLong ? held : null, (decimal)elapsed.Elapsed.TotalSeconds);
 				}
 			}
 
-			private static RunSummary ReportHung(IXunitTestCase testCase, TestCaseCutoffBus caseBus, IMessageBus target, ConsoleCaptureTestBound.CaseClock clock, bool heldTooLong, decimal seconds)
+			// `heldTooLong` is the clock snapshot that crossed the bound, or null when the case ran past
+			// the backstop instead; its epoch is the acquisition that was measured (N-1).
+			private static RunSummary ReportHung(IXunitTestCase testCase, TestCaseCutoffBus caseBus, IMessageBus target, (TimeSpan HeldFor, string? Name, long Epoch)? heldTooLong, decimal seconds)
 			{
 				string name = testCase.DisplayName;
 				string? gateHolder = CultureGate.Holder;
 				string text;
-				if (heldTooLong && clock.LastAcquisition is { } self)
+				if (heldTooLong is { Name: { } selfName } self)
 				{
-					// Poisoned only while this case's own acquisition (its epoch) still holds the gate,
+					// Poisoned only while the measured acquisition (its epoch) still holds the gate,
 					// atomically with that check (L-1), so a later row with the same name or another
 					// test that took the gate since is never named.
-					bool poisoned = CultureGate.State.TryPoisonWhileHeldBy(self.Epoch, self.Name, out _);
+					bool poisoned = CultureGate.State.TryPoisonWhileHeldBy(self.Epoch, selfName, out _);
 					text = $"The console-capture test '{name}' held the CultureGate for more than {ConsoleCaptureTestBound.Timeout.TotalMinutes} minutes; it is hung while holding it. It keeps running in the background and its later output is discarded.{(poisoned ? " Every later CultureGate waiter fails at once while it still holds the gate." : string.Empty)}";
 				}
 				else
@@ -795,19 +798,6 @@ internal static class ConsoleCaptureTestBound
 			}
 		}
 
-		// The case's latest acquisition (name and epoch), kept after release like HolderName, or
-		// null before the first one. Poisoning with it is refused once that acquisition has ended.
-		internal (string Name, long Epoch)? LastAcquisition
-		{
-			get
-			{
-				lock (_gate)
-				{
-					return _state.Name is { } name ? (name, _state.Epoch) : null;
-				}
-			}
-		}
-
 		internal bool IsHolding
 		{
 			get
@@ -819,15 +809,16 @@ internal static class ConsoleCaptureTestBound
 			}
 		}
 
-		// How long the case has held the gate in its current acquisition; zero when not holding.
-		internal TimeSpan HeldFor
+		// N-1: how long the case has held the gate in its current acquisition (zero when not
+		// holding), together with the acquisition it belongs to. The hold time and the acquisition it belongs to, read in ONE critical section, so
+		// the runner's "held too long" decision and the epoch it poisons with always describe the
+		// same acquisition (a release plus a new row in between cannot mix them).
+		internal (TimeSpan HeldFor, string? Name, long Epoch) Snapshot()
 		{
-			get
+			lock (_gate)
 			{
-				lock (_gate)
-				{
-					return _state.Since == 0 ? TimeSpan.Zero : Stopwatch.GetElapsedTime(_state.Since);
-				}
+				TimeSpan held = _state.Since == 0 ? TimeSpan.Zero : Stopwatch.GetElapsedTime(_state.Since);
+				return (held, _state.Name, _state.Epoch);
 			}
 		}
 

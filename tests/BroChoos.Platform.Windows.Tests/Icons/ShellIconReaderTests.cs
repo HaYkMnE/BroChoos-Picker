@@ -125,15 +125,26 @@ public sealed class ShellIconReaderTests(ITestOutputHelper output)
 	// thread (not a pool worker) waits for that signal and releases the extraction at exactly
 	// start + hold by that stamp, so a late pool continuation can no longer stretch the hold into
 	// the budget's margin.
+	//
+	// L-1: THE RELEASER THREAD NEVER OUTLIVES THE SEMAPHORES. If an assertion or an await fails,
+	// the method leaves early while the releaser may still be waiting on `started` or holding, and
+	// the `using` declarations would then dispose the semaphores under it; an exception escaping a
+	// raw Thread crashes the test host. So the body runs in try/finally: the finally cancels `stop`
+	// (which ends every wait and hold in the releaser and the extractor's wait on `release`), joins
+	// the releaser with a bound, and only then do the semaphores go out of scope. The releaser also
+	// catches ObjectDisposedException and OperationCanceledException itself, so even a releaser
+	// that is still alive after the bounded join cannot throw out of its thread.
 	[Fact]
 	public async Task QueuedBehindSlowButAliveWork_IsNotTimedOut()
 	{
 		TimeSpan budget = ShellIconReader.DefaultTimeout;
 		TimeSpan hold = budget * 0.7;
+		using CancellationTokenSource stop = new();
 		using SemaphoreSlim started = new(0);
 		using SemaphoreSlim release = new(0);
 		long[] startedAt = new long[2];
 		int extractions = 0;
+		CancellationToken stopToken = stop.Token;
 		ShellIconReader reader = new(
 			(path, size) =>
 			{
@@ -145,7 +156,10 @@ public sealed class ShellIconReaderTests(ITestOutputHelper output)
 				}
 
 				_ = started.Release();
-				bool released = release.Wait(TimeSpan.FromSeconds(30));
+
+				// A cancelled or disposed wait throws, and the reader turns any extractor exception
+				// into a null icon, so a stopped test only ends the extraction early.
+				bool released = release.Wait(TimeSpan.FromSeconds(30), stopToken);
 				return released ? new IconPixels(size, size, new byte[size * size * 4], true) : null;
 			},
 			budget);
@@ -155,18 +169,25 @@ public sealed class ShellIconReaderTests(ITestOutputHelper output)
 		TimeSpan[] heldFor = new TimeSpan[2];
 		Thread holder = new(() =>
 		{
-			for (int i = 0; i < holderSawStart.Length; i++)
+			try
 			{
-				holderSawStart[i] = started.Wait(TimeSpan.FromSeconds(30));
-				if (!holderSawStart[i])
+				for (int i = 0; i < holderSawStart.Length; i++)
 				{
-					return;
-				}
+					holderSawStart[i] = started.Wait(TimeSpan.FromSeconds(30), stopToken);
+					if (!holderSawStart[i])
+					{
+						return;
+					}
 
-				long since = Volatile.Read(ref startedAt[i]);
-				HoldUntil(since, hold);
-				heldFor[i] = System.Diagnostics.Stopwatch.GetElapsedTime(since);
-				_ = release.Release();
+					long since = Volatile.Read(ref startedAt[i]);
+					HoldUntil(since, hold, stopToken);
+					heldFor[i] = System.Diagnostics.Stopwatch.GetElapsedTime(since);
+					_ = release.Release();
+				}
+			}
+			catch (Exception stopped) when (stopped is OperationCanceledException or ObjectDisposedException)
+			{
+				// The test has already failed or ended; nothing may escape this raw thread.
 			}
 		})
 		{
@@ -174,39 +195,55 @@ public sealed class ShellIconReaderTests(ITestOutputHelper output)
 			Name = "ShellIconReaderTests hold releaser",
 		};
 
-		System.Diagnostics.Stopwatch sinceSecondEnqueued = System.Diagnostics.Stopwatch.StartNew();
-		Task<IconPixels?> first = reader.ReadAsync(exe, 16);
-		Task<IconPixels?> second = reader.ReadAsync(exe, 16);
-		holder.Start();
+		bool holderStarted = false;
+		try
+		{
+			System.Diagnostics.Stopwatch sinceSecondEnqueued = System.Diagnostics.Stopwatch.StartNew();
+			Task<IconPixels?> first = reader.ReadAsync(exe, 16);
+			Task<IconPixels?> second = reader.ReadAsync(exe, 16);
+			holder.Start();
+			holderStarted = true;
 
-		_ = (await first).Should().NotBeNull();
-		IconPixels? secondResult = await second;
-		TimeSpan secondTotal = sinceSecondEnqueued.Elapsed;
-		_ = holder.Join(TimeSpan.FromSeconds(30)).Should().BeTrue("the releaser thread ends after the second hold");
+			_ = (await first).Should().NotBeNull();
+			IconPixels? secondResult = await second;
+			TimeSpan secondTotal = sinceSecondEnqueued.Elapsed;
+			_ = holder.Join(TimeSpan.FromSeconds(30)).Should().BeTrue("the releaser thread ends after the second hold");
 
-		_ = holderSawStart.Should().AllSatisfy(saw => saw.Should().BeTrue("the worker must start each queued extraction"));
-		_output.WriteLine($"HOLD_PROBE hold={hold.TotalMilliseconds}ms heldFor=[{heldFor[0].TotalMilliseconds:F0}, {heldFor[1].TotalMilliseconds:F0}]ms secondTotal={secondTotal.TotalMilliseconds:F0}ms budget={budget.TotalMilliseconds}ms");
-		_ = secondResult.Should().NotBeNull("waiting in the queue does not count against its own budget");
+			_ = holderSawStart.Should().AllSatisfy(saw => saw.Should().BeTrue("the worker must start each queued extraction"));
+			_output.WriteLine($"HOLD_PROBE hold={hold.TotalMilliseconds}ms heldFor=[{heldFor[0].TotalMilliseconds:F0}, {heldFor[1].TotalMilliseconds:F0}]ms secondTotal={secondTotal.TotalMilliseconds:F0}ms budget={budget.TotalMilliseconds}ms");
+			_ = secondResult.Should().NotBeNull("waiting in the queue does not count against its own budget");
 
-		// Guards against a vacuous pass: the second request really did take longer than one
-		// budget from its enqueue, so a budget counted from the enqueue would have failed it.
-		_ = secondTotal.Should().BeGreaterThan(budget, "the second request waited a full hold in the queue and then ran for another, ~1.4 budgets in all");
+			// Guards against a vacuous pass: the second request really did take longer than one
+			// budget from its enqueue, so a budget counted from the enqueue would have failed it.
+			_ = secondTotal.Should().BeGreaterThan(budget, "the second request waited a full hold in the queue and then ran for another, ~1.4 budgets in all");
+		}
+		finally
+		{
+			// Stop the releaser BEFORE the semaphores are disposed at the end of this method.
+			await stop.CancelAsync();
+			if (holderStarted)
+			{
+				_ = holder.Join(TimeSpan.FromSeconds(10));
+			}
+		}
 	}
 
 	// Blocks the calling (dedicated) thread until `hold` has passed since the Stopwatch timestamp
 	// `since`. Sleeps in short steps and re-reads the monotonic clock, so an oversleep is bounded by
-	// one step plus OS scheduling, not by the thread pool.
-	private static void HoldUntil(long since, TimeSpan hold)
+	// one step plus OS scheduling, not by the thread pool. Throws OperationCanceledException once
+	// `stop` is cancelled.
+	private static void HoldUntil(long since, TimeSpan hold, CancellationToken stop)
 	{
 		while (true)
 		{
+			stop.ThrowIfCancellationRequested();
 			TimeSpan left = hold - System.Diagnostics.Stopwatch.GetElapsedTime(since);
 			if (left <= TimeSpan.Zero)
 			{
 				return;
 			}
 
-			Thread.Sleep(left > TimeSpan.FromMilliseconds(20) ? TimeSpan.FromMilliseconds(20) : left);
+			_ = stop.WaitHandle.WaitOne(left > TimeSpan.FromMilliseconds(20) ? TimeSpan.FromMilliseconds(20) : left);
 		}
 	}
 

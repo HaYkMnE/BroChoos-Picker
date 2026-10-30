@@ -74,9 +74,17 @@ internal static class CultureGate
 //
 // INVARIANT, kept under _lock: PoisonedBy is non-null ONLY while Holder equals it, during the
 // acquisition that was poisoned. Take clears the poison for the next acquisition, and Release
-// clears holder and poison together. A waiter that recorded its epoch while the gate was free and
-// then lost the race to a holder that hangs does not poison (the epoch moved during its wait); the
-// next waiter, or the console-capture per-test bound, does.
+// clears holder and poison together.
+//
+// A WAITER THAT STARTED WHILE NOBODY WAS RECORDED AS HOLDER (BeginWait saw Holder == null) also
+// accepts the NEXT acquisition, epoch + 1. That is safe because every Gate.Wait success is
+// followed at once by Take (TakeGate is the only acquisition path), and State.Release runs right
+// before Gate.Release. So while Holder is null at epoch e the gate is free, or its holder is
+// between those two release calls, or the next acquirer is between Gate.Wait and Take, and in
+// every case the next acquisition is e + 1. Epoch e + 1 therefore held the gate for the whole wait
+// apart from those few instructions, and a waiter that lost the race to a holder that hangs names
+// it at once instead of leaving the poison to the next waiter, a further CultureGate.Timeout
+// (10 minutes) later. Epoch e + 2 or later means the gate changed hands during the wait: refused.
 internal sealed class CultureGateState
 {
 	private readonly Lock _lock = new();
@@ -136,16 +144,46 @@ internal sealed class CultureGateState
 	{
 		lock (_lock)
 		{
-			heldBy = Holder;
-			if (_epoch != epoch || heldBy is null || (holder is not null && !string.Equals(heldBy, holder, StringComparison.Ordinal)))
-			{
-				return false;
-			}
-
-			PoisonedBy ??= heldBy;
-			return string.Equals(PoisonedBy, heldBy, StringComparison.Ordinal);
+			return TryPoisonLocked(_epoch == epoch, holder, out heldBy);
 		}
 	}
+
+	// Caller holds _lock and has decided whether the current acquisition is the one to name.
+	private bool TryPoisonLocked(bool currentAcquisitionMatches, string? holder, out string? heldBy)
+	{
+		heldBy = Holder;
+		if (!currentAcquisitionMatches || heldBy is null || (holder is not null && !string.Equals(heldBy, holder, StringComparison.Ordinal)))
+		{
+			return false;
+		}
+
+		PoisonedBy ??= heldBy;
+		return string.Equals(PoisonedBy, heldBy, StringComparison.Ordinal);
+	}
+
+	// Recorded by a waiter BEFORE it waits: the latest epoch and whether a holder was recorded,
+	// read together under the lock.
+	internal WaitStart BeginWait()
+	{
+		lock (_lock)
+		{
+			return new WaitStart(_epoch, Holder is null);
+		}
+	}
+
+	// Called by a waiter that timed out. Poisons only if the acquisition that holds the gate now
+	// held it for the whole wait: the epoch is unchanged, or the wait started with no holder
+	// recorded and this is the very next acquisition (see the header).
+	internal bool TryPoisonAfterWait(WaitStart start, out string? heldBy)
+	{
+		lock (_lock)
+		{
+			bool sameAcquisition = _epoch == start.Epoch || (start.HolderWasNull && _epoch == start.Epoch + 1);
+			return TryPoisonLocked(sameAcquisition, holder: null, out heldBy);
+		}
+	}
+
+	internal readonly record struct WaitStart(long Epoch, bool HolderWasNull);
 
 	// True when the gate is poisoned and still held by the acquisition the poison names.
 	internal bool IsPoisonedAndStillHeld(out string? poisonedBy)
@@ -185,12 +223,12 @@ public sealed class CultureIsolatedAttribute : BeforeAfterTestAttribute
 			}
 		}
 
-		// Recorded BEFORE the wait: on timeout the gate is poisoned only if this same acquisition
-		// held it for the whole wait (see CultureGateState).
-		long epochBeforeWait = CultureGate.State.Epoch;
+		// Recorded BEFORE the wait: on timeout the gate is poisoned only if the acquisition that
+		// holds it now held it for the whole wait (see CultureGateState).
+		CultureGateState.WaitStart waitStart = CultureGate.State.BeginWait();
 		if (!CultureGate.Gate.Wait(CultureGate.Timeout))
 		{
-			bool poisoned = CultureGate.State.TryPoisonWhileHeldBy(epochBeforeWait, holder: null, out string? heldBy);
+			bool poisoned = CultureGate.State.TryPoisonAfterWait(waitStart, out string? heldBy);
 			throw new TimeoutException(poisoned
 				? $"CultureGate was not released within {CultureGate.Timeout.TotalMinutes} minutes; it is held by {heldBy}, which held it for the whole wait."
 				: $"CultureGate was not acquired within {CultureGate.Timeout.TotalMinutes} minutes; it changed hands during the wait, so no holder is blamed (now held by {heldBy ?? "nobody"}).");
@@ -300,6 +338,72 @@ public sealed class CultureGateStateTests
 		_ = state.Take("Tests.Theory");
 
 		_ = state.TryPoisonWhileHeldBy(row1, "Tests.Theory", out _).Should().BeFalse("row 2 is a different acquisition with the same name");
+		_ = state.PoisonedBy.Should().BeNull();
+	}
+
+	// The waiter's own path (BeginWait / TryPoisonAfterWait), for the review scenario: the wait
+	// started while A held the gate, so the next acquisition (B) must not be accepted.
+	[Fact]
+	public void WaitStartedUnderAHolder_TimeoutAfterAHandOver_IsRefused()
+	{
+		CultureGateState state = new();
+		_ = state.Take("Tests.A");
+		CultureGateState.WaitStart start = state.BeginWait();
+		_ = start.Should().Be(new CultureGateState.WaitStart(1, HolderWasNull: false));
+
+		state.Release();
+		_ = state.Take("Tests.B");
+
+		_ = state.TryPoisonAfterWait(start, out string? heldBy).Should().BeFalse("a holder was recorded at the start, so only that acquisition may be named");
+		_ = heldBy.Should().Be("Tests.B");
+		_ = state.PoisonedBy.Should().BeNull();
+	}
+
+	// Accepted-limit fix: the wait started with no holder recorded (epoch e), and the very next
+	// acquisition (e + 1) won the race and then held the gate for the rest of the wait.
+	[Fact]
+	public void WaitStartedWithNoHolder_TimeoutUnderTheNextAcquisition_PoisonsInItsName()
+	{
+		CultureGateState state = new();
+		_ = state.Take("Tests.Earlier");
+		state.Release();
+		CultureGateState.WaitStart start = state.BeginWait();
+		_ = start.Should().Be(new CultureGateState.WaitStart(1, HolderWasNull: true));
+
+		_ = state.Take("Tests.Hung").Should().Be(2);
+
+		_ = state.TryPoisonAfterWait(start, out string? heldBy).Should().BeTrue("epoch e + 1 held the gate for the whole wait");
+		_ = heldBy.Should().Be("Tests.Hung");
+		_ = state.IsPoisonedAndStillHeld(out string? poisonedBy).Should().BeTrue();
+		_ = poisonedBy.Should().Be("Tests.Hung");
+	}
+
+	// The e + 1 allowance goes no further: two hand-overs during the wait are refused.
+	[Fact]
+	public void WaitStartedWithNoHolder_TimeoutAfterTwoAcquisitions_IsRefused()
+	{
+		CultureGateState state = new();
+		CultureGateState.WaitStart start = state.BeginWait();
+		_ = start.Should().Be(new CultureGateState.WaitStart(0, HolderWasNull: true));
+
+		_ = state.Take("Tests.First");
+		state.Release();
+		_ = state.Take("Tests.Second").Should().Be(2);
+
+		_ = state.TryPoisonAfterWait(start, out string? heldBy).Should().BeFalse("the gate changed hands during the wait");
+		_ = heldBy.Should().Be("Tests.Second");
+		_ = state.PoisonedBy.Should().BeNull("Second took the gate late in the wait and must not be reported");
+	}
+
+	// A free gate at timeout (the next acquirer has not taken it yet) names nobody.
+	[Fact]
+	public void WaitStartedWithNoHolder_TimeoutWhileStillFree_IsRefused()
+	{
+		CultureGateState state = new();
+		CultureGateState.WaitStart start = state.BeginWait();
+
+		_ = state.TryPoisonAfterWait(start, out string? heldBy).Should().BeFalse();
+		_ = heldBy.Should().BeNull();
 		_ = state.PoisonedBy.Should().BeNull();
 	}
 
