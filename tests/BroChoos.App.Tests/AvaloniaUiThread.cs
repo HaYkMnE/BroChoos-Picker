@@ -81,11 +81,11 @@ public sealed class AvaloniaUiTestFramework(IMessageSink messageSink) : XunitTes
 			RunSummary summary = await base.RunTestCollectionsAsync(messageBus, cancellationTokenSource);
 
 			// Late items: anything posted to the UI thread after the avalonia-ui collection finished
-			// (for example by a pool-thread test) still fails the run, at assembly level.
-			await AvaloniaUiThread.FlushAsync();
-			if (TakeEscapedFailures() is { } late)
+			// (for example by a pool-thread test) still fails the run, at assembly level. After a
+			// collection timeout the thread is known to be hung, so it is not flushed again.
+			foreach (Exception failure in await CollectCleanupFailuresAsync("assembly end", flush: !AvaloniaUiThread.Hung))
 			{
-				_ = messageBus.QueueMessage(new TestAssemblyCleanupFailure(TestCases, TestAssembly, late));
+				_ = messageBus.QueueMessage(new TestAssemblyCleanupFailure(TestCases, TestAssembly, failure));
 				summary.Failed++;
 			}
 
@@ -99,34 +99,133 @@ public sealed class AvaloniaUiTestFramework(IMessageSink messageSink) : XunitTes
 				return await base.RunTestCollectionAsync(messageBus, testCollection, testCases, cancellationTokenSource);
 			}
 
+			CutoffMessageBus collectionBus = new(messageBus);
 			RunSummary summary;
 			try
 			{
-				summary = await AvaloniaUiThread.RunAsync(() => base.RunTestCollectionAsync(messageBus, testCollection, testCases, cancellationTokenSource), AvaloniaUiThread.CollectionTimeout);
+				summary = await AvaloniaUiThread.RunAsync(() => base.RunTestCollectionAsync(collectionBus, testCollection, testCases, cancellationTokenSource), AvaloniaUiThread.CollectionTimeout);
 			}
 			catch (TimeoutException timeout)
 			{
 				// Reported as a collection failure instead of thrown: a throw here would escape the
 				// async void RunTestCases and crash the test host without naming anything.
+				//
+				// The bus is cut off first, so the hung collection, which keeps running on the UI
+				// thread, can never post a message after this point, in particular not after
+				// TestAssemblyFinished. Its later messages are dropped, not refused: a false return
+				// would make xUnit cancel the shared token and stop the other collections too.
+				collectionBus.Close();
+				AvaloniaUiThread.Hung = true;
 				TimeoutException named = new(
 					$"The avalonia-ui collection did not finish within {AvaloniaUiThread.CollectionTimeout.TotalMinutes} minutes on its dedicated test thread; the thread is hung (CultureGate holder: {CultureGate.Holder ?? "none"}).",
 					timeout);
 				_ = messageBus.QueueMessage(new TestCollectionCleanupFailure(testCases, testCollection, named));
-				return new RunSummary { Total = 1, Failed = 1 };
+
+				// The hung run never returns its own summary, so the counts are rebuilt from the
+				// results it did report before the cutoff, plus one failure for the timeout. The
+				// test that hung reported no result and is not counted on its own.
+				return new RunSummary
+				{
+					Total = collectionBus.Total + 1,
+					Failed = collectionBus.Failed + 1,
+					Skipped = collectionBus.Skipped,
+				};
 			}
 
 			// The pump records an exception that escaped a work item (an async void rethrow, a
 			// throwing Post callback) instead of dying with it. Items posted by the last test are
-			// flushed first, then any recorded exception fails the collection, whatever the order
-			// in which the guard test ran.
-			await AvaloniaUiThread.FlushAsync();
-			if (TakeEscapedFailures() is { } escaped)
+			// flushed first, then any recorded exception, or a flush that timed out, fails the
+			// collection, whatever the order in which the guard test ran.
+			//
+			// A cleanup failure is sent to VSTest as an adapter ERROR message, and it turns the run
+			// (and the dotnet test exit code) into a failure only because the VSTest setting
+			// RunConfiguration.TreatTestAdapterErrorsAsWarnings keeps its default, false. The guard
+			// TestRunConfigurationTests in BroChoos.Architecture.Tests fails if any runsettings,
+			// build file or workflow in the repository turns it on.
+			foreach (Exception failure in await CollectCleanupFailuresAsync("the end of the avalonia-ui collection", flush: true))
 			{
-				_ = messageBus.QueueMessage(new TestCollectionCleanupFailure(testCases, testCollection, escaped));
+				_ = messageBus.QueueMessage(new TestCollectionCleanupFailure(testCases, testCollection, failure));
 				summary.Failed++;
 			}
 
 			return summary;
+		}
+
+		private static async Task<List<Exception>> CollectCleanupFailuresAsync(string point, bool flush)
+		{
+			List<Exception> failures = [];
+			if (flush && await AvaloniaUiThread.FlushAsync(point) is { } flushTimeout)
+			{
+				failures.Add(flushTimeout);
+			}
+
+			if (TakeEscapedFailures() is { } escaped)
+			{
+				failures.Add(escaped);
+			}
+
+			return failures;
+		}
+
+		// Forwards the avalonia-ui collection's messages to the assembly bus until Close, and counts
+		// the test results that went through, so a timed-out collection still reports real counts.
+		// After Close every message is dropped and true is returned: a false return would make
+		// xUnit cancel the shared token and stop the collections that are not hung.
+		private sealed class CutoffMessageBus(IMessageBus inner) : IMessageBus
+		{
+			private readonly Lock gate = new();
+			private bool closed;
+
+			internal int Total { get; private set; }
+
+			internal int Failed { get; private set; }
+
+			internal int Skipped { get; private set; }
+
+			public bool QueueMessage(IMessageSinkMessage message)
+			{
+				lock (gate)
+				{
+					if (closed)
+					{
+						return true;
+					}
+
+					switch (message)
+					{
+						case ITestFailed:
+							Total++;
+							Failed++;
+							break;
+						case ITestSkipped:
+							Total++;
+							Skipped++;
+							break;
+						case ITestPassed:
+							Total++;
+							break;
+						default:
+							break;
+					}
+
+					return inner.QueueMessage(message);
+				}
+			}
+
+			// The lock makes the cutoff exact: once Close returns, no message of this collection is
+			// in flight to the assembly bus or can reach it later.
+			internal void Close()
+			{
+				lock (gate)
+				{
+					closed = true;
+				}
+			}
+
+			// The inner bus belongs to the assembly runner, which disposes it.
+			public void Dispose()
+			{
+			}
 		}
 
 		private static InvalidOperationException? TakeEscapedFailures()
@@ -164,9 +263,15 @@ internal static class AvaloniaUiThread
 	// The end-of-collection flush waits at most this long for items already queued.
 	private static readonly TimeSpan FlushTimeout = TimeSpan.FromMinutes(2);
 
+	// The life of one Send item. Exactly one CompareExchange wins each transition:
+	// Pending -> Running (the pump starts it) or Pending -> Abandoned (the caller timed out first);
+	// Running -> Finished (it completed and hands its outcome to the caller) or
+	// Running -> Orphaned (the caller timed out while it ran; its outcome goes to EscapedFailures).
 	private const int Pending = 0;
-	private const int Started = 1;
+	private const int Running = 1;
 	private const int Abandoned = 2;
+	private const int Finished = 3;
+	private const int Orphaned = 4;
 
 	private static readonly BlockingCollection<Action> Work = [];
 
@@ -176,7 +281,14 @@ internal static class AvaloniaUiThread
 
 	internal static bool SetupRan { get; set; }
 
-	// Exceptions that escaped a work item. The pump keeps running; the guard test reports them.
+	// Set when the avalonia-ui collection timed out: the thread is hung, so it is not flushed again.
+	internal static bool Hung { get; set; }
+
+	// Exceptions that escaped a work item, and failures of Send callbacks that finished after their
+	// caller had timed out. The pump keeps running. The framework drains this queue at the end of
+	// the avalonia-ui collection and again at assembly end and reports each batch as a cleanup
+	// failure, which fails the run. The guard test NoWorkItem_EscapedOnTheDedicatedThread is only
+	// an earlier signal for items recorded before it runs.
 	internal static ConcurrentQueue<string> EscapedFailures { get; } = [];
 
 	private static readonly Thread UiThread = Start();
@@ -217,16 +329,21 @@ internal static class AvaloniaUiThread
 	}
 
 	// Runs every item queued so far (FIFO), so callbacks posted by the last test have executed
-	// before EscapedFailures is read. A hung thread is not waited on past FlushTimeout.
-	internal static async Task FlushAsync()
+	// before EscapedFailures is read. A hung thread is not waited on past FlushTimeout: the
+	// timeout is returned, and the caller reports it as a cleanup failure, since the items that
+	// did not run may hide exactly the failures the flush exists to catch.
+	internal static async Task<TimeoutException?> FlushAsync(string point)
 	{
 		try
 		{
 			_ = await RunAsync(() => Task.FromResult(true), FlushTimeout).ConfigureAwait(false);
+			return null;
 		}
-		catch (TimeoutException)
+		catch (TimeoutException timeout)
 		{
-			Console.Error.WriteLine($"[avalonia-ui test thread] flush did not complete within {FlushTimeout.TotalMinutes} minutes; reading escaped failures without it.");
+			return new TimeoutException(
+				$"The avalonia-ui test thread did not drain its queue within {FlushTimeout.TotalMinutes} minutes at {point}; it is busy or hung (CultureGate holder: {CultureGate.Holder ?? "none"}), so work items still queued there were not checked for escaped exceptions.",
+				timeout);
 		}
 	}
 
@@ -281,38 +398,61 @@ internal static class AvaloniaUiThread
 
 			// No disposable wait handle: a timed-out item may still be dequeued later, and it must
 			// then neither run the callback nor touch anything the caller has already dropped. The
-			// claim decides exactly once whether the item runs (Started) or is skipped (Abandoned).
+			// claim (see Pending..Orphaned) decides each outcome exactly once.
 			TaskCompletionSource<Exception?> done = new(TaskCreationOptions.RunContinuationsAsynchronously);
 			int claim = Pending;
 			Work.Add(() =>
 			{
-				if (Interlocked.CompareExchange(ref claim, Started, Pending) != Pending)
+				if (Interlocked.CompareExchange(ref claim, Running, Pending) != Pending)
 				{
 					return;
 				}
 
+				Exception? thrown = null;
 				try
 				{
 					d(state);
-					_ = done.TrySetResult(null);
 				}
-				catch (Exception thrown)
+				catch (Exception failure)
+				{
+					thrown = failure;
+				}
+
+				if (Interlocked.CompareExchange(ref claim, Finished, Running) == Running)
 				{
 					_ = done.TrySetResult(thrown);
+				}
+				else if (thrown is not null)
+				{
+					// Orphaned: the caller already gave up, so nobody would see this failure. It is
+					// recorded instead, and the framework fails the run with it.
+					string text = "A callback sent to the avalonia-ui test thread failed after its caller had timed out: " + thrown;
+					EscapedFailures.Enqueue(text);
+					Console.Error.WriteLine("[avalonia-ui test thread] " + text);
 				}
 			});
 			if (!done.Task.Wait(SendTimeout))
 			{
-				throw Interlocked.CompareExchange(ref claim, Abandoned, Pending) == Pending
-					? new TimeoutException(
-						$"A callback sent to the avalonia-ui test thread did not start within {SendTimeout.TotalMinutes} minutes, which is longer than any legitimate wait there (CultureGate {CultureGate.Timeout.TotalMinutes} minutes plus a margin); the thread is hung in another work item (CultureGate holder: {CultureGate.Holder ?? "none"}). The callback was abandoned and will not run.")
-					: new TimeoutException(
-						$"A callback sent to the avalonia-ui test thread started but did not finish within {SendTimeout.TotalMinutes} minutes; the callback itself is hung.");
+				int seen = Interlocked.CompareExchange(ref claim, Abandoned, Pending);
+				if (seen == Pending)
+				{
+					throw new TimeoutException(
+						$"A callback sent to the avalonia-ui test thread did not start within {SendTimeout.TotalMinutes} minutes, which is longer than any legitimate wait there (CultureGate {CultureGate.Timeout.TotalMinutes} minutes plus a margin); the thread is hung in another work item (CultureGate holder: {CultureGate.Holder ?? "none"}). The callback was abandoned and will not run.");
+				}
+
+				if (seen == Running && Interlocked.CompareExchange(ref claim, Orphaned, Running) == Running)
+				{
+					throw new TimeoutException(
+						$"A callback sent to the avalonia-ui test thread was still running {SendTimeout.TotalMinutes} minutes after it was sent; it may have started late or be hung itself. It keeps running, and if it throws, the failure is recorded and fails the run.");
+				}
+
+				// Otherwise the callback finished in the window between the timed-out wait and the
+				// claim check. Its outcome is set right after the claim, so it is handled normally.
 			}
 
-			if (done.Task.Result is { } failure)
+			if (done.Task.GetAwaiter().GetResult() is { } sentFailure)
 			{
-				throw new InvalidOperationException("A callback sent to the avalonia-ui test thread failed.", failure);
+				throw new InvalidOperationException("A callback sent to the avalonia-ui test thread failed.", sentFailure);
 			}
 		}
 
