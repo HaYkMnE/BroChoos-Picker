@@ -8,7 +8,8 @@ namespace BroChoos.Release.Tests;
 
 // Release pipeline contract: .github/workflows/release.yml, the self-contained publish, and the
 // package-manager templates under packaging/. Everything here reads files from the repository;
-// only the changelog-notes tests start a powershell.exe child, and it writes only under %TEMP%.
+// only the changelog-notes tests and the winget-fill tests (RunWingetFill) start a powershell.exe
+// child, and each writes only under %TEMP%.
 //
 // WHY THESE PINS. The product identity (name, publisher, AppId, exe name, portable marker) is
 // spelled in several files that different tools read: MSBuild, Inno Setup, winget and Scoop. A
@@ -422,6 +423,9 @@ public sealed partial class ReleasePipelineTests
 			UseShellExecute = false,
 			CreateNoWindow = true,
 		};
+		// A PowerShell 7 parent leaks its PSModulePath, and Windows PowerShell 5.1 then cannot autoload
+		// its own modules (Microsoft.PowerShell.Security). Absent, 5.1 rebuilds its default path.
+		_ = startInfo.Environment.Remove("PSModulePath");
 		startInfo.Environment["GIT_CEILING_DIRECTORIES"] = ceiling;
 		foreach (string argument in arguments)
 		{
@@ -689,6 +693,9 @@ public sealed partial class ReleasePipelineTests
 				UseShellExecute = false,
 				CreateNoWindow = true,
 			};
+			// A PowerShell 7 parent leaks its PSModulePath, and Windows PowerShell 5.1 then cannot autoload
+			// its own modules (Microsoft.PowerShell.Security). Absent, 5.1 rebuilds its default path.
+			_ = startInfo.Environment.Remove("PSModulePath");
 			string[] arguments = ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script, "-Version", version, "-OutFile", outFile, "-ChangelogPath", changelogPath];
 			foreach (string argument in arguments)
 			{

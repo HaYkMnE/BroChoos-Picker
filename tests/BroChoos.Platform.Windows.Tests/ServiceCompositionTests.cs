@@ -265,17 +265,22 @@ public sealed class ServiceCompositionTests
 			writers,
 			TimeProvider.System);
 
-		PlatformStorage.BrowserCatalogPersistenceService service = factory.Create(@"E:\Custom\Data\");
+		// The argument root must sit on a volume that exists where the test runs: the resolver's
+		// volume gate reads the REAL drive type, and a hosted runner has no E: drive (NoRootDirectory
+		// is rightly rejected). Provisioning is faked, so nothing is created under %TEMP%.
+		// GetFullPath expands an 8.3 short name in %TEMP% (e.g. RUNNER~1) the way the resolver does.
+		string argumentRoot = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "brochoos-arg-root-" + Guid.NewGuid().ToString("N")[..12]));
+		PlatformStorage.BrowserCatalogPersistenceService service = factory.Create(argumentRoot + @"\");
 
 		_ = provisioning.CreatedDirectories.Should().Equal(
-			@"E:\Custom\Data",
-			@"E:\Custom\Data\backups",
-			@"E:\Custom\Data\logs",
-			@"E:\Custom\Data\temp");
+			argumentRoot,
+			Path.Combine(argumentRoot, "backups"),
+			Path.Combine(argumentRoot, "logs"),
+			Path.Combine(argumentRoot, "temp"));
 
 		_ = service.Persist([new("edge-stable", "Microsoft Edge", @"C:\Edge\msedge.exe", "stable", "known-path")])
 			.Status.Should().Be(PlatformStorage.BrowserCatalogPersistenceStatus.Persisted);
-		_ = writers.DestinationPath.Should().Be(@"E:\Custom\Data\browsers.json");
+		_ = writers.DestinationPath.Should().Be(Path.Combine(argumentRoot, "browsers.json"));
 	}
 
 	// 0A-5: the service the CONTAINER's factory returns is usable, end to end, against a

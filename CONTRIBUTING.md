@@ -13,7 +13,7 @@ Thanks for helping. Bug reports, translation fixes and pull requests are all wel
 You need:
 
 - Windows 10 or 11, x64;
-- the .NET SDK pinned in [global.json](global.json) (10.0.100, later feature bands allowed);
+- the .NET SDK pinned in [global.json](global.json) (10.0.201, later patches of the 10.0.2xx feature band allowed);
 - Git.
 
 Any editor works. The repository's `.editorconfig` sets the formatting rules.

@@ -226,6 +226,9 @@ public sealed partial class InstallerLifecycleTests
 			UseShellExecute = false,
 			CreateNoWindow = true,
 		};
+		// A PowerShell 7 parent leaks its PSModulePath, and Windows PowerShell 5.1 then cannot autoload
+		// its own modules (Microsoft.PowerShell.Security). Absent, 5.1 rebuilds its default path.
+		_ = startInfo.Environment.Remove("PSModulePath");
 
 		using Process process = Process.Start(startInfo)!;
 		Task<string> stdoutTask = process.StandardOutput.ReadToEndAsync();
@@ -462,6 +465,9 @@ public sealed partial class InstallerLifecycleTests
 			UseShellExecute = false,
 			CreateNoWindow = true,
 		};
+		// A PowerShell 7 parent leaks its PSModulePath, and Windows PowerShell 5.1 then cannot autoload
+		// its own modules (Microsoft.PowerShell.Security). Absent, 5.1 rebuilds its default path.
+		_ = startInfo.Environment.Remove("PSModulePath");
 
 		using Process process = Process.Start(startInfo)!;
 

@@ -172,9 +172,14 @@ function Invoke-PackagerValidateOnly {
             [Environment]::SetEnvironmentVariable($overrideEnvName, $null, 'Process')
         }
 
+        # A PowerShell 7 parent leaks its PSModulePath, and the Windows PowerShell 5.1 child then
+        # cannot autoload its own modules. Cleared, 5.1 rebuilds its default path.
+        $previousModulePath = $env:PSModulePath
+        $env:PSModulePath = $null
         $proc = Start-Process -FilePath 'powershell.exe' -ArgumentList $argLine -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath -Wait -PassThru
     }
     finally {
+        $env:PSModulePath = $previousModulePath
         [Environment]::SetEnvironmentVariable($overrideEnvName, $previousOverrideEnv, 'Process')
     }
 

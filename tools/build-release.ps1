@@ -140,7 +140,16 @@ if (-not [string]::IsNullOrWhiteSpace($IsccPath)) {
 	$packagerArgs += @('-IsccPath', $IsccPath)
 }
 
-& powershell @packagerArgs
+# A PowerShell 7 parent leaks its PSModulePath, and the Windows PowerShell 5.1 child then cannot
+# autoload its own modules (Microsoft.PowerShell.Security). Cleared, 5.1 rebuilds its default.
+$parentModulePath = $env:PSModulePath
+try {
+	$env:PSModulePath = $null
+	& powershell @packagerArgs
+}
+finally {
+	$env:PSModulePath = $parentModulePath
+}
 if ($LASTEXITCODE -ne 0) {
 	throw "Packager failed with exit code $LASTEXITCODE."
 }

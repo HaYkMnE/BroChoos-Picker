@@ -205,7 +205,7 @@ The app follows your Windows display language and falls back to English. This do
 
 ## Build from source
 
-You need Windows and the .NET SDK version pinned in [global.json](global.json) (10.0.100 or a later feature band). These are the commands CI runs:
+You need Windows and the .NET SDK version pinned in [global.json](global.json) (10.0.201 or a later patch in the 10.0.2xx feature band). These are the commands CI runs:
 
 ```powershell
 dotnet restore BroChoos.sln

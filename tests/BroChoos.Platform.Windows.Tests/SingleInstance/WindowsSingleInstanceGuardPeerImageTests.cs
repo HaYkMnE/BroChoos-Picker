@@ -102,6 +102,9 @@ public sealed class WindowsSingleInstanceGuardPeerImageTests
 			RedirectStandardOutput = true,
 			RedirectStandardError = true,
 		};
+		// A PowerShell 7 parent leaks its PSModulePath, and Windows PowerShell 5.1 then cannot autoload
+		// its own modules (Microsoft.PowerShell.Security). Absent, 5.1 rebuilds its default path.
+		_ = startInfo.Environment.Remove("PSModulePath");
 
 		Process child = Process.Start(startInfo)!;
 		exitCode = child.WaitForExitAsync().ContinueWith(_ =>
