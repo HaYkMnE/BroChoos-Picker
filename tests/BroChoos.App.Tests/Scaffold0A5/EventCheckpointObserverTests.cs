@@ -16,8 +16,9 @@ namespace BroChoos.App.Tests.Scaffold0A5;
 // test passing for the wrong reason. These tests pin the properties that make that impossible
 // to miss.
 //
-// Deliberately fast: every park bound here is a few hundred milliseconds, so the whole class
-// costs well under a second and adds no meaningful time to the suite.
+// Deliberately fast: a park that is meant to expire is bounded at a few hundred milliseconds,
+// and a park that is meant to be released is released by a signal, so the whole class costs
+// well under a second. The long bounds below are hang guards only and are never waited out.
 //
 // DEBUG-ONLY NOW, AND THE COMMENT THIS REPLACES WAS THE REASONING BEHIND A SECURITY DEFECT.
 // It read: "NOT #if DEBUG - the scaffold compiles in Release too, so gating these would leave
@@ -45,9 +46,18 @@ namespace BroChoos.App.Tests.Scaffold0A5;
 // Task.Delay instead, which is the same observation without occupying the thread.
 public sealed class EventCheckpointObserverTests
 {
-	// Long enough that a loaded CI machine cannot expire a park that the test intends to
-	// release, short enough to keep the suite quick.
-	private static readonly TimeSpan ReleasablePark = TimeSpan.FromSeconds(5);
+	// The cap for a park the test intends to RELEASE. It must be out of reach of any scheduling
+	// delay, because the observer's own WaitOne is a kernel wait that keeps time while the thread
+	// pool does not: CI run 41048551150 (test-debug) failed when the old 5 s cap expired and
+	// OnStage returned while the 200 ms Task.Delay that was meant to observe "still parked" had
+	// not yet completed on a starved pool. Ten minutes is far above HangGuard, so a released park
+	// can only end because proceed was set, and an expiry here is a real failure.
+	private static readonly TimeSpan ReleasablePark = TimeSpan.FromMinutes(10);
+
+	// The bound on waits that are EXPECTED to succeed. It only turns a hang into a failure, so it
+	// is generous: on a loaded machine it costs nothing, because the awaited thing finishes first.
+	// Kept below ReleasablePark so a hang is reported by the test, not by a park expiry.
+	private static readonly TimeSpan HangGuard = TimeSpan.FromMinutes(2);
 
 	// Short on purpose: this one is MEANT to expire.
 	private static readonly TimeSpan ExpiringPark = TimeSpan.FromMilliseconds(250);
@@ -71,13 +81,20 @@ public sealed class EventCheckpointObserverTests
 
 		// The signal must arrive while the call is STILL INSIDE OnStage: the harness asserts
 		// against the destination at this instant, so "reached" has to mean "parked here now".
-		_ = reached.WaitOne(ReleasablePark).Should().BeTrue("an armed stage must signal reached");
+		_ = reached.WaitOne(HangGuard).Should().BeTrue("an armed stage must signal reached");
+
+		// "Still parked" is decided by the observer's state, not by a race: proceed is not set and
+		// the park cap is far out of reach, so the only way OnStage can have returned is a defect.
+		// The 200 ms window is a bounded wait that is EXPECTED to time out; it gives a broken
+		// observer a chance to return early, and a slow scheduler can only lengthen it.
+		_ = park.IsCompleted.Should().BeFalse("the observer must still be parked, not returned");
 		_ = (await CompletedWithin(park, TimeSpan.FromMilliseconds(200)))
 			.Should().BeFalse("the observer must still be parked, not returned");
+		_ = observer.ExpiredStages.Should().BeEmpty("a park that is still waiting has not expired");
 
 		_ = proceed.Set();
 
-		_ = (await CompletedWithin(park, ReleasablePark)).Should().BeTrue("setting proceed must release the park");
+		_ = (await CompletedWithin(park, HangGuard)).Should().BeTrue("setting proceed must release the park");
 		_ = expired.Should().BeEmpty("a released park is not an expired one");
 		_ = observer.ExpiredStages.Should().BeEmpty();
 	}
@@ -123,7 +140,7 @@ public sealed class EventCheckpointObserverTests
 
 		// The completion bound only guards against a hang; it is far above six parks
 		// (6 x ExpiringPark = 1.5 s) so it never decides the result on a loaded machine.
-		_ = (await CompletedWithin(all, ReleasablePark)).Should().BeTrue("the calls must return, not hang");
+		_ = (await CompletedWithin(all, HangGuard)).Should().BeTrue("the calls must return, not hang");
 
 		// Same 500 ms bound as before, now applied to the calls alone: generously above the cost
 		// of six hash lookups, so this fails if unarmed stages start waiting.
@@ -148,7 +165,10 @@ public sealed class EventCheckpointObserverTests
 		// The whole point: nobody ever sets proceed. The observer must free itself on its own
 		// timeout - from LockAcquired onward the park is inside the per-file write mutex, so an
 		// unbounded wait would wedge every other writer of the file behind a dead parent.
-		_ = (await CompletedWithin(park, TimeSpan.FromSeconds(5)))
+		// HangGuard, not a tight bound: Task.Run itself can start late on a starved pool, so a
+		// short wall-clock budget here would measure the scheduler. Nobody can set proceed, so the
+		// task can only complete through the observer's own expiry, and expired proves it did.
+		_ = (await CompletedWithin(park, HangGuard))
 			.Should().BeTrue("the park must be bounded and expire on its own");
 
 		_ = expired.Should().ContainSingle().Which.Should().Be(AtomicWriteStage.LockAcquired);
@@ -181,7 +201,7 @@ public sealed class EventCheckpointObserverTests
 		// thread: an escape would surface as a faulted task here.
 		Task park = Task.Run(() => observer.OnStage(AtomicWriteStage.AfterPublish));
 
-		Task winner = await Task.WhenAny(park, Task.Delay(TimeSpan.FromSeconds(5)));
+		Task winner = await Task.WhenAny(park, Task.Delay(HangGuard));
 
 		_ = ReferenceEquals(winner, park).Should().BeTrue("the park must still expire and return, even when the callback throws");
 		_ = park.IsFaulted.Should().BeFalse("a throwing park-expiry callback must NOT escape OnStage - the write path has no try/catch around it");
