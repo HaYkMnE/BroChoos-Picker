@@ -2190,8 +2190,14 @@ internal sealed class PickerSession(
 			{
 				// Off the UI thread, but KEPT: Complete() waits for it (bounded) so the audit line
 				// is not lost when the picker process exits right after the choice. The catch
-				// inside WriteCleanupAuditFailOpen means the task can never fault.
-				PendingCleanupAuditForTests = Task.Run(() => WriteCleanupAuditFailOpen(cleanupEvent));
+				// inside WriteCleanupAuditFailOpen means the task can never fault. LongRunning gives
+				// the blocking write its own thread, so a starved thread pool cannot push its start
+				// past Complete()'s 1 s bound (the ProblemLog drain flake, CI run 41027998726).
+				PendingCleanupAuditForTests = Task.Factory.StartNew(
+					() => WriteCleanupAuditFailOpen(cleanupEvent),
+					CancellationToken.None,
+					TaskCreationOptions.LongRunning,
+					TaskScheduler.Default);
 			}
 			else
 			{

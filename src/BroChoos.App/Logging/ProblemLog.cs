@@ -56,7 +56,7 @@ internal sealed record ProblemLogEntry(
 	IReadOnlyList<KeyValuePair<string, string>> Data);
 
 // WRITE PATH: callers (the UI thread included) only enqueue into a bounded in-memory queue and
-// return; ONE background drain task at a time takes the cross-process mutex, prunes once per
+// return; ONE dedicated background drain thread at a time takes the cross-process mutex, prunes once per
 // process, rotates and appends. Crash handlers use WriteNow, which drains whatever is still
 // queued and then writes the crash line synchronously, flushed to disk, on the calling thread.
 internal sealed class ProblemLogWriter
@@ -106,7 +106,7 @@ internal sealed class ProblemLogWriter
 	internal Action? BeforeAppend { get; init; }
 
 	// Never touches the disk and never blocks on it: the line is queued with its timestamp and
-	// the drain task is started if none is running. When the queue is full the OLDEST line is
+	// the drain thread is started if none is running. When the queue is full the OLDEST line is
 	// dropped and counted. Returns false only if even queuing failed.
 	public bool Write(ProblemLogEntry entry)
 	{
@@ -133,7 +133,7 @@ internal sealed class ProblemLogWriter
 
 			if (start)
 			{
-				_ = Task.Run(DrainLoop);
+				StartDrainThread();
 			}
 
 			return true;
@@ -245,6 +245,31 @@ internal sealed class ProblemLogWriter
 		}
 
 		return Encoding.UTF8.GetString(buffer.ToArray());
+	}
+
+	// The drain runs on its OWN background thread, not on the thread pool. With Task.Run a
+	// starved pool (a loaded 2-vCPU CI runner, every test project in parallel) started the drain
+	// seconds late, so Flush(5 s) timed out with 600 ms of work not yet begun (CI run
+	// 41027998726; ProblemLogStarvationTests). The thread lives for one burst: DrainLoop exits
+	// when it finds the queue empty under _queueGate, and the next Write, which checks _draining
+	// under the same lock, starts a new one, so no line is left without a drain. IsBackground:
+	// process exit never waits for it (ProcessExit gives it the bounded ShutdownDrainTimeout).
+	private void StartDrainThread()
+	{
+		try
+		{
+			new Thread(DrainLoop) { IsBackground = true, Name = "BroChoos.ProblemLog.Drain" }.Start();
+		}
+		catch (Exception ex) when (ex is not OutOfMemoryException)
+		{
+			// No thread: clear the flag so the next Write tries again. The lines stay queued, so
+			// Flush still waits for them (bounded) instead of reporting them written.
+			lock (_queueGate)
+			{
+				_draining = false;
+				Monitor.PulseAll(_queueGate);
+			}
+		}
 	}
 
 	private void DrainLoop()

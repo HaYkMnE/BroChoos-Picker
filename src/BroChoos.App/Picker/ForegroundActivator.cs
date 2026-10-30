@@ -45,7 +45,14 @@ internal static class ForegroundActivator
 
 	public static async Task<Outcome> ActivateAsync(IntPtr hwnd, uint uiThreadId, CancellationToken cancellationToken)
 	{
-		Task<Outcome> ladder = Task.Run(() => RunLadder(hwnd, uiThreadId), CancellationToken.None);
+		// LongRunning: the ladder blocks (Thread.Sleep, Win32 calls) for up to the 1.5 s attach
+		// budget, and on a starved thread pool a Task.Run start alone could eat the HardCap and
+		// report TimedOut for a ladder that never ran.
+		Task<Outcome> ladder = Task.Factory.StartNew(
+			() => RunLadder(hwnd, uiThreadId),
+			CancellationToken.None,
+			TaskCreationOptions.LongRunning,
+			TaskScheduler.Default);
 
 		try
 		{
