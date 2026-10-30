@@ -163,6 +163,8 @@ function Invoke-PackagerValidateOnly {
 
     $overrideEnvName = 'BROCHOOS_TEST_APPROVAL_OVERRIDE'
     $previousOverrideEnv = [Environment]::GetEnvironmentVariable($overrideEnvName, 'Process')
+    # Captured before try, so the finally block always restores a real value.
+    $previousModulePath = $env:PSModulePath
 
     try {
         if ($EnableTestOverrideContext) {
@@ -174,7 +176,6 @@ function Invoke-PackagerValidateOnly {
 
         # A PowerShell 7 parent leaks its PSModulePath, and the Windows PowerShell 5.1 child then
         # cannot autoload its own modules. Cleared, 5.1 rebuilds its default path.
-        $previousModulePath = $env:PSModulePath
         $env:PSModulePath = $null
         $proc = Start-Process -FilePath 'powershell.exe' -ArgumentList $argLine -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath -Wait -PassThru
     }

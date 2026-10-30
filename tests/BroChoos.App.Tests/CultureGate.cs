@@ -33,6 +33,18 @@ internal static class CultureGate
 {
 	internal static readonly SemaphoreSlim Gate = new(1, 1);
 
+	// Bounded: a test that hangs while holding the gate makes the next test fail with a message
+	// that names the holder, instead of the whole run waiting silently until the CI job is cancelled.
+	internal static readonly TimeSpan Timeout = TimeSpan.FromMinutes(10);
+
+	// The test currently holding the gate, for timeout messages only. The backing store is the
+	// compiler's private field (C# 14 `field`), read and written only through Volatile.
+	internal static string? Holder
+	{
+		get => Volatile.Read(ref field);
+		set => Volatile.Write(ref field, value);
+	}
+
 	// True only inside a test that took the gate ITSELF. The gate's count alone cannot say
 	// that: it also reads as taken while a test of the OTHER collection holds it.
 	private static readonly AsyncLocal<bool> HeldByCurrentTestFlag = new();
@@ -49,13 +61,20 @@ public sealed class CultureIsolatedAttribute : BeforeAfterTestAttribute
 {
 	public override void Before(MethodInfo methodUnderTest)
 	{
-		CultureGate.Gate.Wait();
+		if (!CultureGate.Gate.Wait(CultureGate.Timeout))
+		{
+			throw new TimeoutException(
+				$"CultureGate was not released within {CultureGate.Timeout.TotalMinutes} minutes; it is held by {CultureGate.Holder ?? "an unknown test"}.");
+		}
+
+		CultureGate.Holder = methodUnderTest.DeclaringType?.FullName + "." + methodUnderTest.Name;
 		CultureGate.HeldByCurrentTest = true;
 	}
 
 	public override void After(MethodInfo methodUnderTest)
 	{
 		CultureGate.HeldByCurrentTest = false;
+		CultureGate.Holder = null;
 		_ = CultureGate.Gate.Release();
 	}
 }
