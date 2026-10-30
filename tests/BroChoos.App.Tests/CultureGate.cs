@@ -86,8 +86,21 @@ internal static class CultureGate
 // includes any OS scheduling delay of the thread running them), and a waiter that lost the race
 // to a holder that hangs names it at once instead of leaving the poison to the next waiter, a
 // further CultureGate.Timeout (10 minutes) later. Epoch e + 2 or later means the gate changed
-// hands during the wait: refused. CultureGateInvariantTests pins the acquisition and release
-// paths this rests on.
+// hands during the wait: refused.
+//
+// WHAT PINS THIS. BroChoos.Architecture.Tests/CultureGateInvariantTests parses every source of
+// this project (and every file its MSBuild <Compile Include> items name) with Roslyn, once per CI
+// configuration (Debug and Release), and fails unless, on the syntax tree, in each: Gate outside
+// CultureGate is used only as Gate.CurrentCount, Gate.Wait(..) or Gate.Release(); Wait and Release
+// are called only inside CultureIsolatedAttribute, exactly 2 Wait and 1 Release; each Wait is the
+// whole condition of an if, either "if (Gate.Wait(..))" whose block starts with TakeGate(..), or
+// "if (!Gate.Wait(..))" with no else, whose block ends in throw and whose next statement is
+// TakeGate(..); the attribute declares exactly one TakeGate and one After; the Release takes no
+// arguments and is a direct statement of After's body, right after CultureGate.State.Release()
+// (written out in full, not as a bare State); and CultureGate.State.Take / State.Release are
+// invoked once each, Take as a top-level statement of TakeGate and Release in After. A using
+// static or alias of CultureGate, in source or as an MSBuild <Using> item, also fails it. Comments
+// and string literals are not code to it; reflection is out of its scope.
 internal sealed class CultureGateState
 {
 	private readonly Lock _lock = new();
