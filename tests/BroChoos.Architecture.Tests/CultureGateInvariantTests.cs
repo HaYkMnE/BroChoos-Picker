@@ -47,8 +47,12 @@ namespace BroChoos.Architecture.Tests;
 // HOW CultureGate MEMBERS ARE FOUND. CultureGate is a static class, so its members are reachable as
 // CultureGate.X (any qualifier ending in CultureGate), as a bare name inside class CultureGate, or
 // through a using static / alias of it. Those are forbidden in source (using directives) and in
-// MSBuild (any <Using> item naming CultureGate, which would land in obj\GlobalUsings.g.cs, outside
-// the scan). As a second line, a bare Gate or State outside class CultureGate fails unless a
+// MSBuild. A <Using> item lands in obj\GlobalUsings.g.cs, outside the scan, so in the scanned
+// MSBuild files every <Using> item with an Alias, or with a Static other than a literal false
+// (as an attribute or as child metadata), fails whatever it names, and so does every <Using> whose
+// Include or Update contains CultureGate, CultureIsolated, InternalsVisibleTo (each also covers
+// its ..Attribute / ..State spelling) or a computed value ($(, @(, %(). The repository has no
+// <Using> item today. As a second line, a bare Gate or State outside class CultureGate fails unless a
 // member, local, parameter or other name Gate / State is declared in its scope (syntax level: the
 // enclosing types' members and anything declared inside the enclosing member).
 //
@@ -126,14 +130,16 @@ namespace BroChoos.Architecture.Tests;
 //      banned in every form the scan can see: an [assembly: InternalsVisibleTo(..)] attribute (also
 //      written ..Attribute or qualified), a using alias whose target's rightmost name is
 //      InternalsVisibleTo or InternalsVisibleToAttribute, and in the scanned MSBuild files an
-//      <InternalsVisibleTo> item and a <Using> item that names it. Every <AssemblyAttribute> item in
+//      <InternalsVisibleTo> item and any <Using> item that names it or carries an Alias (see HOW
+//      CultureGate MEMBERS ARE FOUND for the full <Using> ban). Every <AssemblyAttribute> item in
 //      the scanned MSBuild files is banned outright, whatever its Include (it is emitted to
 //      obj\*.AssemblyInfo.cs, which the scan does not read). Out of scope: MSBuild files the scan
 //      does not list, such as NuGet build\*.props / *.targets and obj\*.nuget.g.props.
 //   7. The attribute is used exactly twice in the scanned sources, counting every attribute whose
 //      rightmost name is CultureIsolated or CultureIsolatedAttribute (qualified forms included),
 //      and each usage sits on a class that also carries [CollectionDefinition(..)]. A using alias of
-//      the attribute is banned (it would hide a usage). Stacked scopes (the collection definition
+//      the attribute is banned (it would hide a usage), in source and as an MSBuild <Using> item
+//      (any Alias, or an Include / Update naming CultureIsolated). Stacked scopes (the collection definition
 //      plus a test class, a method or a base class) make xUnit v2 run Before twice for one test,
 //      and the gate is not re-entrant: the second Before waits the full CultureGate.Timeout
 //      (10 minutes) on the gate the first one took.
@@ -142,14 +148,15 @@ namespace BroChoos.Architecture.Tests;
 // allowed, the two parses above see every branch the CI builds compile, in every file, whether or
 // not it mentions CultureGate (deciding "mentions" would itself depend on the active branch).
 //
-// RULE -> PROBE. Each probe is a temporary edit (run by hand). All 63 listed here (41 earlier
-// ones, 18 prefixed a7- and 4 prefixed a8-) were run against the current rules. Every probe must
+// RULE -> PROBE. Each probe is a temporary edit (run by hand). All 68 listed here (41 earlier
+// ones, 18 prefixed a7-, 4 prefixed a8- and 5 prefixed a9-) were run against the current rules. Every probe must
 // turn this test red, except a8-thr-lam, which must stay green (it pins the lambda exemption).
 // Grouped in the order of SOURCES, HOW .. FOUND, THE RULES and the fail-closed paragraph.
 //   sources             F5 (.cs in a nested bin), a7-imp (<Import>), a7-cmp (<Compile Include> of
 //                       a missing file)
 //   using static        a7-uss (using static BroChoos.App.Tests.CultureGate;), a7-usg (<Using
-//                       Include="..CultureGate" Static="true">), a7-bare (bare Gate outside the class)
+//                       Include="..CultureGate" Static="true">), a7-bare (bare Gate outside the class),
+//                       a9-usm (<Using Include="System.Math" Static="true">)
 //   declarations        nf3 (partial CultureGateState), nf3b (CultureGateState in another file)
 //   1 Gate shapes       g1 (Gate.WaitAsync() in another file), g2 (Gate?.Wait(0)), g3
 //                       (Gate.AvailableWaitHandle), g4 (Func<int, bool> f = Gate.Wait;), g5 (Gate
@@ -177,9 +184,12 @@ namespace BroChoos.Architecture.Tests;
 //                       b (this CultureGateState), c (extension(CultureGateState))
 //   6 IVT               F4 ([assembly: InternalsVisibleTo]), e (using alias of IVT), a7-ivt
 //                       (<InternalsVisibleTo> item), a (<AssemblyAttribute> IVT), m2
-//                       (<AssemblyAttribute @(..)>)
+//                       (<AssemblyAttribute @(..)>), a9-uivt (<Using Include="..InternalsVisibleToAttribute"
+//                       Alias="Ivt">)
 //   7 [CultureIsolated] a8-iso-cls ([CultureIsolated] on a test class), a8-iso-mth ([CultureIsolated]
-//                       on a test method)
+//                       on a test method), a9-uiso (<Using Include="..CultureIsolatedAttribute"
+//                       Alias="Iso">), a9-ali (using Iso = ..CultureIsolatedAttribute;), a9-cnt
+//                       (one of the two real [CultureIsolated] usages removed)
 //   fail closed         a7-def (#define), a7-ifu (#if UNKNOWN)
 public sealed class CultureGateInvariantTests(ITestOutputHelper output)
 {
@@ -204,6 +214,10 @@ public sealed class CultureGateInvariantTests(ITestOutputHelper output)
 	private static readonly string[] WildcardOrList = ["*", "?", ";"];
 
 	private static readonly string[] UnresolvableInclude = [.. ComputedValue, .. WildcardOrList];
+
+	// An MSBuild <Using> item whose Include or Update contains one of these (ordinal substring, so
+	// CultureIsolatedAttribute and InternalsVisibleToAttribute are covered too) fails the scan.
+	private static readonly string[] UsingBannedNames = [GateType, IsolatedName, "InternalsVisibleTo"];
 
 	[Fact]
 	public void CultureGate_IsTakenAndReleasedOnlyOnThePinnedPaths()
@@ -1067,8 +1081,16 @@ public sealed class CultureGateInvariantTests(ITestOutputHelper output)
 					case "AssemblyAttribute":
 						violations.Add($"{where}: an MSBuild <AssemblyAttribute> item ({element}) is not allowed in this project: it would be emitted to obj\\*.AssemblyInfo.cs, which the scan does not read, and could let another assembly reach {GateType} (InternalsVisibleTo); declare assembly attributes in a scanned .cs file instead");
 						break;
-					case "Using" when element.Attributes().Any(attribute => attribute.Name.LocalName is "Include" or "Update" && (attribute.Value.Contains(GateType, StringComparison.Ordinal) || ComputedValue.Any(attribute.Value.Contains))):
-						violations.Add($"{where}: an MSBuild <Using> item names {GateType} or a computed value ({element}); it would be emitted to obj\\GlobalUsings.g.cs, which the scan does not read");
+					// Emitted to obj\GlobalUsings.g.cs, which the scan does not read. An alias or a using
+					// static there could hide [CultureIsolated] (rule 7), InternalsVisibleTo (rule 6) or
+					// CultureGate members, whatever it names, so both are banned outright, as an attribute
+					// or as child metadata (Static is allowed only as a literal false).
+					case "Using" when UsingMetadata(element, "Alias").Any()
+						|| UsingMetadata(element, "Static").Any(value => !value.Trim().Equals("false", StringComparison.OrdinalIgnoreCase)):
+						violations.Add($"{where}: an MSBuild <Using> item with Alias or Static ({element}) is not allowed in this project: it would be emitted to obj\\GlobalUsings.g.cs, which the scan does not read, and could hide [{IsolatedName}], InternalsVisibleTo or {GateType} from it; write the using in a scanned .cs file instead");
+						break;
+					case "Using" when element.Attributes().Any(attribute => attribute.Name.LocalName is "Include" or "Update" && (UsingBannedNames.Any(name => attribute.Value.Contains(name, StringComparison.Ordinal)) || ComputedValue.Any(attribute.Value.Contains))):
+						violations.Add($"{where}: an MSBuild <Using> item names {GateType}, {IsolatedName}, InternalsVisibleTo or a computed value ({element}); it would be emitted to obj\\GlobalUsings.g.cs, which the scan does not read");
 						break;
 					case "Compile" when include is not null:
 						if (UnresolvableInclude.Any(include.Contains))
@@ -1096,6 +1118,14 @@ public sealed class CultureGateInvariantTests(ITestOutputHelper output)
 		}
 
 		return [.. files.Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.Ordinal)];
+	}
+
+	// The values of an item's metadata `name`, written as an attribute or as a child element
+	// (matched by local name).
+	private static IEnumerable<string> UsingMetadata(XElement element, string name)
+	{
+		return element.Attributes().Where(attribute => attribute.Name.LocalName == name).Select(attribute => attribute.Value)
+			.Concat(element.Elements().Where(child => child.Name.LocalName == name).Select(child => child.Value));
 	}
 
 	// The csproj, and each Directory.Build.props / .targets / Directory.Packages.props from the
