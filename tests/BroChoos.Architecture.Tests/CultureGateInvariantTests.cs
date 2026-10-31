@@ -56,7 +56,12 @@ namespace BroChoos.Architecture.Tests;
 // are kept off: setting a property in SwitchProperties (UseWPF, UseWindowsForms, UseMaui, the
 // Razor and generator switches, the target framework / platform identity) fails, every
 // <TargetFramework> / <TargetFrameworks> must equal PinnedTargetFramework, the project's Sdk
-// attribute must be exactly Microsoft.NET.Sdk, and a <Sdk> element fails. A Directory.Build.rsp
+// attribute must be Microsoft.NET.Sdk (compared ignoring case, as MSBuild resolves SDK names, but
+// with no version and no list of SDKs), and a <Sdk> element fails. Avalonia XAML is kept off as
+// well: an <AvaloniaXaml> or <AvaloniaResource> item fails, and so does any *.axaml file under
+// the project (only the project-root bin and obj folders are excluded), because Avalonia's
+// XamlIl compiler and Avalonia.Generators turn them into code the scan cannot see (the default
+// Avalonia globs pick up **\*.axaml with no item in the scanned files). A Directory.Build.rsp
 // from the project folder up to the repository root fails too: MSBuild reads the one nearest
 // the ENTRY project (the BroChoos.sln at the root in CI, or this project when it is built
 // directly), and it can pass -p: for any of those properties. An <Analyzer Include=..> item, an
@@ -189,12 +194,12 @@ namespace BroChoos.Architecture.Tests;
 // allowed, the two parses above see every branch the CI builds compile, in every file, whether or
 // not it mentions CultureGate (deciding "mentions" would itself depend on the active branch).
 //
-// RULE -> PROBE. Each probe is a temporary edit (run by hand). All 107 listed here (41 earlier
+// RULE -> PROBE. Each probe is a temporary edit (run by hand). All 115 listed here (41 earlier
 // ones, 18 prefixed a7-, 4 prefixed a8-, 5 prefixed a9-, 11 prefixed a10-, 6 prefixed a11-, 9
-// prefixed a12- and 13 prefixed a13-) were run against the current rules. Every probe must turn
-// this test red, except the seven marked GREEN, which must stay green: a8-thr-lam (the lambda
-// exemption), a12-defok, a12-anr, a12-out, a12-rspx, a13-tfok and a13-oitp (each pins that a
-// rule is no wider than it says).
+// prefixed a12-, 13 prefixed a13- and 8 prefixed a14-) were run against the current rules. Every
+// probe must turn this test red, except the eight marked GREEN, which must stay green: a8-thr-lam
+// (the lambda exemption), a12-defok, a12-anr, a12-out, a12-rspx, a13-tfok, a13-oitp and a14-sdkl
+// (each pins that a rule is no wider than it says).
 // Grouped in the order of SOURCES, HOW .. FOUND, THE RULES and the fail-closed paragraph.
 //   sources             F5 (.cs in a nested bin), a7-imp (<Import>), a7-cmp (<Compile Include> of
 //                       a missing file), a11-cmpl (<compile Include="ZzMissing.cs"/>), a10-tgt
@@ -218,7 +223,14 @@ namespace BroChoos.Architecture.Tests;
 //                       a13-wpf (<UseWPF>true), a13-tf (<TargetFramework>net10.0), a13-tfok
 //                       (GREEN: <TargetFramework>net10.0-windows10.0.19041.0), a13-sdk (Project
 //                       Sdk="Microsoft.NET.Sdk.Razor"), a13-fwr (<FrameworkReference
-//                       Include="Microsoft.AspNetCore.App"/>), a13-page (<Page Include="x.xaml"/>)
+//                       Include="Microsoft.AspNetCore.App"/>), a13-page (<Page Include="x.xaml"/>),
+//                       a14-sdkl (GREEN: Project Sdk="microsoft.net.sdk"), a14-sdkv (Project
+//                       Sdk="Microsoft.NET.Sdk/10.0.201"; the message shows the value), a14-avx
+//                       (<AvaloniaXaml Include="x.axaml"/>), a14-avr (<AvaloniaResource
+//                       Include="x.axaml"/>), a14-axf (an empty Zz.axaml in the project folder),
+//                       a14-iwdt (<ImportWindowsDesktopTargets>true), a14-ixt
+//                       (<ImportXamlTargets>true), a14-tfm (<TargetFramework>net10.0; the message
+//                       names PinnedTargetFramework)
 //   using static        a7-uss (using static BroChoos.App.Tests.CultureGate;), a7-usg (<Using
 //                       Include="..CultureGate" Static="true">), a7-bare (bare Gate outside the
 //                       class), a9-usm (<Using Include="System.Math" Static="true">), a10-ul
@@ -296,7 +308,7 @@ public sealed class CultureGateInvariantTests(ITestOutputHelper output)
 
 	// The MSBuild element names the scan acts on, in their canonical spelling; an element matches one
 	// ignoring case (see MsBuildName).
-	private static readonly string[] ScannedElements = ["Import", "Target", "Analyzer", "AddModules", "FrameworkReference", "Page", "ApplicationDefinition", "InternalsVisibleTo", "AssemblyAttribute", "Using", "Compile"];
+	private static readonly string[] ScannedElements = ["Import", "Target", "Analyzer", "AddModules", "FrameworkReference", "Page", "ApplicationDefinition", "AvaloniaXaml", "AvaloniaResource", "InternalsVisibleTo", "AssemblyAttribute", "Using", "Compile"];
 
 	// The properties that feed the path of an SDK <Import>. Setting one in a scanned MSBuild file
 	// could import an MSBuild file the scan never reads, with no <Import> of its own
@@ -323,8 +335,10 @@ public sealed class CultureGateInvariantTests(ITestOutputHelper output)
 	// ImportProjectExtensionProps / ..Targets only drop the obj\*.nuget.g.* files (out of scope,
 	// rule 6); ImportByWildcard* / ImportUserLocationsByWildcard* default to true and only drop
 	// the SDK's ImportBefore / ImportAfter files and the user-profile extension folders (outside the
-	// repository, machine set-up); ImportXamlTargets, ImportNuGetBuildTasksPackTargetsFromSdk and
-	// ImportFrameworkWinFXTargets only switch on files that ship with the SDK. Reserved names in
+	// repository, machine set-up); ImportNuGetBuildTasksPackTargetsFromSdk and
+	// ImportFrameworkWinFXTargets only switch on files that ship with the SDK (the latter, on a
+	// .NETCoreApp target, only skips Microsoft.WinFX.targets). ImportWindowsDesktopTargets and
+	// ImportXamlTargets switch on code-generating targets and are in SwitchProperties. Reserved names in
 	// the list (MSBuildProjectFile and the like) cannot be set at all; they stay so that the list
 	// is the whole closure.
 	private static readonly string[] ImportProperties =
@@ -406,12 +420,18 @@ public sealed class CultureGateInvariantTests(ITestOutputHelper output)
 	// UsingMicrosoftNETSdkBlazorWebAssembly are set by those SDKs), and the target identity that
 	// PinnedTargetFramework would otherwise not cover (TargetFrameworkIdentifier / ..Version /
 	// ..Moniker, TargetPlatformIdentifier / ..Version: they decide which SDK targets are
-	// imported). Banned outright in a <PropertyGroup> (matched ignoring case); the repository sets
-	// none of them in the scanned files (App.Tests uses Avalonia, not WPF).
+	// imported), and two Import*Targets switches from SDK 10.0.201: ImportWindowsDesktopTargets
+	// (true appends Microsoft.NET.Sdk.WindowsDesktop.targets to AfterMicrosoftNETSdkTargets in
+	// Microsoft.NET.Sdk.targets, and that file imports Microsoft.WinFX.targets, XAML Page
+	// compilation, even without UseWPF) and ImportXamlTargets (Microsoft.Common.CurrentVersion.targets
+	// imports $(MSBuildToolsPath)\Microsoft.Xaml.targets, the XAML build-task targets; SDK 10.0.201
+	// ships no such file, but Visual Studio's MSBuild does, so it is banned too). Neither is in
+	// ImportProperties. Banned outright in a <PropertyGroup> (matched ignoring case); the repository
+	// sets none of them in the scanned files (App.Tests uses Avalonia, not WPF).
 	private static readonly string[] SwitchProperties =
 	[
-		"EnableDefaultApplicationDefinition", "EnableDefaultPageItems",
-		"IncludePackageReferencesDuringMarkupCompilation", "TargetFrameworkIdentifier",
+		"EnableDefaultApplicationDefinition", "EnableDefaultPageItems", "ImportWindowsDesktopTargets",
+		"ImportXamlTargets", "IncludePackageReferencesDuringMarkupCompilation", "TargetFrameworkIdentifier",
 		"TargetFrameworkMoniker", "TargetFrameworkVersion", "TargetPlatformIdentifier",
 		"TargetPlatformVersion", "UseMaui", "UseRazorSourceGenerator", "UseWPF", "UseWindowsForms",
 		"UsingMicrosoftNETSdkBlazorWebAssembly", "UsingMicrosoftNETSdkRazor", "UsingMicrosoftNETSdkWeb",
@@ -419,11 +439,13 @@ public sealed class CultureGateInvariantTests(ITestOutputHelper output)
 
 	// The one target framework the CI builds App.Tests for (BroChoos.App.Tests.csproj). Any
 	// <TargetFramework> or <TargetFrameworks> in the scanned files must be exactly this, so a
-	// different TF cannot select other SDK targets; changing the csproj's TF means changing this.
+	// different TF cannot select other SDK targets. A TF upgrade changes three places together:
+	// BroChoos.App.Tests.csproj, BroChoos.App.csproj (the two must match) and this constant.
 	private const string PinnedTargetFramework = "net10.0-windows10.0.19041.0";
 
 	// The only Sdk the project may name (Microsoft.NET.Sdk.Razor, .Web or .WindowsDesktop would
-	// import code-generating targets).
+	// import code-generating targets). Compared ignoring case, as MSBuild resolves SDK names; a
+	// version (Name/1.0) or a list (A;B) is a different value and fails.
 	private const string PinnedSdk = "Microsoft.NET.Sdk";
 
 	[Fact]
@@ -1279,6 +1301,15 @@ public sealed class CultureGateInvariantTests(ITestOutputHelper output)
 			violations.Add($"{Path.GetRelativePath(root, rsp)}: a Directory.Build.rsp could set MSBuild properties the scan cannot see; remove it");
 		}
 
+		// Avalonia's default globs pick up **\*.axaml with no item in the scanned files, and XamlIl
+		// and Avalonia.Generators compile each one into code the scan cannot see. App.Tests has none.
+		foreach (string axaml in Directory.EnumerateFiles(project, "*.axaml", SearchOption.AllDirectories)
+			.Where(path => Path.GetRelativePath(project, path).Split(Path.DirectorySeparatorChar) is var segments
+				&& !(segments.Length > 1 && segments[0] is "bin" or "obj")))
+		{
+			violations.Add($"{Path.GetRelativePath(root, axaml)}: an Avalonia .axaml file is not allowed in this project: XamlIl and Avalonia.Generators would compile it into code the scan cannot see");
+		}
+
 		foreach (string msbuild in MsBuildFiles(root, project))
 		{
 			string where = Path.GetRelativePath(root, msbuild);
@@ -1313,19 +1344,23 @@ public sealed class CultureGateInvariantTests(ITestOutputHelper output)
 				if (inPropertyGroup && (MsBuildName(element.Name.LocalName, "TargetFramework") || MsBuildName(element.Name.LocalName, "TargetFrameworks"))
 					&& element.Value.Trim() != PinnedTargetFramework)
 				{
-					violations.Add($"{where}: <{element.Name.LocalName}> ({element}) must be exactly {PinnedTargetFramework}; another target framework could select SDK targets the scan was not written for");
+					violations.Add($"{where}: <{element.Name.LocalName}> ({element}) must be exactly {PinnedTargetFramework} (the constant PinnedTargetFramework in CultureGateInvariantTests.cs); another target framework could select SDK targets the scan was not written for. A TF upgrade changes three places: BroChoos.App.Tests.csproj, BroChoos.App.csproj (the two must match) and PinnedTargetFramework");
 				}
 
 				// The SDK is pinned, by the Project's Sdk attribute and with no <Sdk> element.
-				if (MsBuildName(element.Name.LocalName, "Sdk")
-					|| (element.Parent is null && element.Attribute("Sdk") is { } sdk && sdk.Value.Trim() != PinnedSdk))
+				// MSBuild resolves SDK names ignoring case; a version or a list is still refused.
+				if (MsBuildName(element.Name.LocalName, "Sdk"))
 				{
-					violations.Add($"{where}: an SDK other than exactly {PinnedSdk} ({element.Name.LocalName}) is not allowed in the scanned MSBuild files: Razor, Web or WindowsDesktop targets can generate code the scan does not read");
+					violations.Add($"{where}: an <Sdk> element ({element}) is not allowed in the scanned MSBuild files: it adds an SDK whose targets (Razor, Web, WindowsDesktop) can generate code the scan does not read");
+				}
+
+				if (element.Parent is null && element.Attribute("Sdk") is { } sdk && !MsBuildName(sdk.Value.Trim(), PinnedSdk))
+				{
+					violations.Add($"{where}: the Project Sdk attribute is \"{sdk.Value}\" but must be {PinnedSdk} (any letter case, no version, no list of SDKs): Razor, Web or WindowsDesktop targets can generate code the scan does not read");
 				}
 
 				// Csc parameters that can add code the scan does not see (CompilerProperties).
-				if (element.Parent is { } compilerGroup && MsBuildName(compilerGroup.Name.LocalName, "PropertyGroup")
-					&& CompilerProperties.Any(name => MsBuildName(element.Name.LocalName, name)))
+				if (inPropertyGroup && CompilerProperties.Any(name => MsBuildName(element.Name.LocalName, name)))
 				{
 					violations.Add($"{where}: the property <{element.Name.LocalName}> ({element}) is passed to the compiler and could add sources, analyzers or symbols the scan cannot see");
 				}
@@ -1389,6 +1424,11 @@ public sealed class CultureGateInvariantTests(ITestOutputHelper output)
 					// empty, compiling XAML (x:Code included) into obj\*.g.cs.
 					case "Page" or "ApplicationDefinition" when !IsPureRemove(element):
 						violations.Add($"{where}: an MSBuild <{element.Name.LocalName}> item ({element}) is not allowed in the scanned MSBuild files: XAML markup compilation would generate code into obj\\*.g.cs, which the scan does not read");
+						break;
+					// Avalonia's XamlIl compiler and Avalonia.Generators compile these items into
+					// code the scan cannot see (the .axaml files themselves are checked below).
+					case "AvaloniaXaml" or "AvaloniaResource" when !IsPureRemove(element):
+						violations.Add($"{where}: an MSBuild <{element.Name.LocalName}> item ({element}) is not allowed in the scanned MSBuild files: Avalonia XamlIl and Avalonia.Generators would compile it into code the scan cannot see");
 						break;
 					// A task in a target can create items at build time (<CreateItem ..><Output
 					// TaskParameter="Include" ItemName="Using"/></CreateItem>, or an <ItemGroup> inside the
