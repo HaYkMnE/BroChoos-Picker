@@ -14,9 +14,10 @@ namespace BroChoos.Architecture.Tests;
 // match nor hide one).
 //
 // WHAT IT PINS: the syntax checks listed in THE RULES and nothing more: the shape of every use of
-// CultureGate.Gate and CultureGate.State, the control-flow shapes of CultureIsolatedAttribute.Before
-// / TakeGate / After, that the attribute is sealed and declares nothing named TakeGate or
-// CultureGate besides the TakeGate method, and that no scanned source names Before or After.
+// CultureGate.Gate and CultureGate.State, the control-flow shapes of
+// CultureIsolatedAttribute.Before / TakeGate / After, that the attribute is sealed and declares
+// nothing named TakeGate or CultureGate besides the TakeGate method, and that no scanned source
+// names Before or After.
 // WHAT IT DOES NOT PIN:
 //   - Whether a statement the rules allow can throw. That covers the statements before State.Take
 //     in TakeGate and the try block of After. A throw in TakeGate leaks the gate, because xUnit v2
@@ -37,23 +38,28 @@ namespace BroChoos.Architecture.Tests;
 //   - What CultureGateState does inside its own methods (CultureGateStateTests covers that).
 //
 // SOURCES. Every .cs under the project (only the project-root bin and obj folders are excluded; a
-// nested folder named bin or obj is scanned) plus every <Compile Include=..> item
-// in the csproj and in each Directory.Build.props / Directory.Build.targets / Directory.Packages.props
-// from the project folder up to the repository root (elements matched by local name). An Include
-// that holds $(, @(, %(, * , ? or ; cannot be resolved here and fails the scan, so does a missing
-// file and any <Import> in those MSBuild files. Every file is parsed twice, once per CI
-// configuration: Debug (DEBUG;TRACE) and Release (TRACE), and every count below must hold in EACH.
+// nested folder named bin or obj is scanned) plus every <Compile Include=..> item in the csproj
+// and in each Directory.Build.props / Directory.Build.targets / Directory.Packages.props from the
+// project folder up to the repository root. Elements and metadata are matched by local name,
+// ignoring case as MSBuild does for item types and metadata; the Include / Update attribute names
+// are matched exactly, as MSBuild does for attributes (see MsBuildName). An Include that holds
+// $(, @(, %(, * , ? or ; cannot be resolved here and fails the scan, so does a missing file, any
+// <Import> and any <Target> in those MSBuild files (a task in a target could create Using,
+// Compile, InternalsVisibleTo or AssemblyAttribute items at build time). Every file is parsed
+// twice, once per CI configuration: Debug (DEBUG;TRACE) and Release (TRACE), and every count
+// below must hold in EACH.
 //
-// HOW CultureGate MEMBERS ARE FOUND. CultureGate is a static class, so its members are reachable as
-// CultureGate.X (any qualifier ending in CultureGate), as a bare name inside class CultureGate, or
-// through a using static / alias of it. Those are forbidden in source (using directives) and in
+// HOW CultureGate MEMBERS ARE FOUND. CultureGate is a static class, so its members are reachable
+// as CultureGate.X (any qualifier ending in CultureGate), as a bare name inside class CultureGate,
+// or through a using static / alias of it. Those are forbidden in source (using directives) and in
 // MSBuild. A <Using> item lands in obj\GlobalUsings.g.cs, outside the scan, so in the scanned
-// MSBuild files every <Using> item with an Alias, or with a Static other than a literal false
-// (as an attribute or as child metadata), fails whatever it names, and so does every <Using> whose
-// Include or Update contains CultureGate, CultureIsolated, InternalsVisibleTo (each also covers
-// its ..Attribute / ..State spelling) or a computed value ($(, @(, %(). The repository has no
-// <Using> item today. As a second line, a bare Gate or State outside class CultureGate fails unless a
-// member, local, parameter or other name Gate / State is declared in its scope (syntax level: the
+// MSBuild files every <Using> item with an Alias (even an empty one), or with a Static other than
+// a literal false (as an attribute or as child metadata, in any letter case), fails whatever it
+// names, and so does every <Using> whose Include or Update contains CultureGate, CultureIsolated,
+// InternalsVisibleTo (each also covers its ..Attribute / ..State spelling) or a computed value
+// ($(, @(, %(). The repository has no <Using> item today. As a second line, a bare Gate or State
+// outside class CultureGate fails unless a member, local, parameter or other name Gate / State is
+// declared in its scope (syntax level: the
 // enclosing types' members and anything declared inside the enclosing member).
 //
 // THE RULES. Exactly one class CultureGate and one class CultureIsolatedAttribute are declared, and
@@ -95,36 +101,38 @@ namespace BroChoos.Architecture.Tests;
 //      CultureGate.State.Take(..) is the LAST statement of TakeGate's body, with no return, throw
 //      statement, throw expression or goto in the statements before it (lambdas and local
 //      functions declared there are not searched: their exits leave only them), so nothing in
-//      TakeGate runs after the acquisition is recorded. Its argument
-//      list is exactly one bare identifier naming a local declared directly in TakeGate's body
-//      (holder), and each pinned TakeGate(..) call passes exactly Before's parameter (methodUnderTest)
-//      as a bare identifier: arguments are evaluated after the Wait succeeded, so an expression
-//      there (x ?? throw ..) could throw and leak the gate.
+//      TakeGate runs after the acquisition is recorded. Its argument list is exactly one bare
+//      identifier naming a local declared directly in TakeGate's body (holder), and each pinned
+//      TakeGate(..) call passes exactly Before's parameter (methodUnderTest) as a bare
+//      identifier: arguments are evaluated after the Wait succeeded, so an expression there
+//      (x ?? throw ..) could throw and leak the gate.
 //      Outside lambdas and local functions, Before and TakeGate hold no using declaration
 //      (using var d = ..;) and no using statement, and TakeGate holds no foreach (its enumerator's
 //      implicit Dispose): their Dispose runs after the acquisition, and a throw from it would leak
 //      the gate.
-//      TakeGate is named exactly twice inside the attribute (calls, method groups, nameof and generic
-//      names such as TakeGate<T> all count), and both are the pinned TakeGate(..) statements of rule 2.
+//      TakeGate is named exactly twice inside the attribute (calls, method groups, nameof and
+//      generic names such as TakeGate<T> all count), and both are the pinned TakeGate(..)
+//      statements of rule 2.
 //   4. After's body is exactly one statement, "try { .. } finally { CultureGate.State.Release();
 //      Gate.Release(); }": no catch clause, and the finally holds exactly those two statements in
 //      that order (Gate.Release with no arguments, as a statement or "_ = .."). Outside lambdas and
 //      local functions, After holds no other try and no return, goto, yield, throw statement or
 //      throw expression. A throw from a call in the try block still reaches the finally.
 //   5. CultureGate.State (or a bare State inside class CultureGate) is only ever the receiver of a
-//      member access; Take and Release on it are always invoked, Take exactly once (in TakeGate) and
-//      Release exactly once (in After). The member must be one that CultureGateState declares
+//      member access; Take and Release on it are always invoked, Take exactly once (in TakeGate)
+//      and Release exactly once (in After). The member must be one that CultureGateState declares
 //      (the non-private members parsed from class CultureGateState, see StateMembers); anything
-//      else, such as ToString or GetType, is a violation. Calls on
-//      other receivers (a test's own "state") are not matched. An extension method with an allowed
-//      name (BeginWait, say) would pass that check and could run anything, and the receiver type
-//      cannot be trusted (this object o, this T o, extension(object o) all bind to CultureGate.State),
-//      so extensions are banned BY NAME: no method with a this parameter, and no member of a C# 14
-//      extension(..) block, may be named like a CultureGateState member, whatever its receiver type.
+//      else, such as ToString or GetType, is a violation. Calls on other receivers (a test's own
+//      "state") are not matched. An extension method with an allowed name (BeginWait, say) would
+//      pass that check and could run anything, and the receiver type cannot be trusted (this
+//      object o, this T o, extension(object o) all bind to CultureGate.State), so extensions are
+//      banned BY NAME: no method with a this parameter, and no member of a C# 14 extension(..)
+//      block, may be named like a CultureGateState member, whatever its receiver type.
 //      This also fails an unrelated extension helper that happens to share such a name (Take,
 //      Release, Holder, Epoch, ..) on any type, even one that never touches CultureGate. That is
-//      intentional: the syntax scan cannot tell the two apart, so it fails closed; rename the helper.
-//      As well, no this parameter and no extension(..) receiver may have the type CultureGateState.
+//      intentional: the syntax scan cannot tell the two apart, so it fails closed; rename the
+//      helper. As well, no this parameter and no extension(..) receiver may have the type
+//      CultureGateState.
 //      Out of scope: extensions declared in referenced assemblies (packages, other projects).
 //   6. Another assembly must not be able to reach CultureGate unseen, so InternalsVisibleTo is
 //      banned in every form the scan can see: an [assembly: InternalsVisibleTo(..)] attribute (also
@@ -133,14 +141,17 @@ namespace BroChoos.Architecture.Tests;
 //      <InternalsVisibleTo> item and any <Using> item that names it or carries an Alias (see HOW
 //      CultureGate MEMBERS ARE FOUND for the full <Using> ban). Every <AssemblyAttribute> item in
 //      the scanned MSBuild files is banned outright, whatever its Include (it is emitted to
-//      obj\*.AssemblyInfo.cs, which the scan does not read). Out of scope: MSBuild files the scan
-//      does not list, such as NuGet build\*.props / *.targets and obj\*.nuget.g.props.
+//      obj\*.AssemblyInfo.cs, which the scan does not read). Item names are matched ignoring case
+//      (<internalsvisibleto>, <assemblyattribute>), and no <Target> may create such items at build
+//      time (SOURCES). Out of scope: MSBuild files the scan does not list, such as NuGet
+//      build\*.props / *.targets and obj\*.nuget.g.props.
 //   7. The attribute is used exactly twice in the scanned sources, counting every attribute whose
 //      rightmost name is CultureIsolated or CultureIsolatedAttribute (qualified forms included),
-//      and each usage sits on a class that also carries [CollectionDefinition(..)]. A using alias of
-//      the attribute is banned (it would hide a usage), in source and as an MSBuild <Using> item
-//      (any Alias, or an Include / Update naming CultureIsolated). Stacked scopes (the collection definition
-//      plus a test class, a method or a base class) make xUnit v2 run Before twice for one test,
+//      and each usage sits on a class that also carries [CollectionDefinition(..)]. A using alias
+//      of the attribute is banned (it would hide a usage), in source and as an MSBuild <Using>
+//      item (any Alias, or an Include / Update naming CultureIsolated). Stacked scopes (the
+//      collection definition plus a test class, a method or a base class) make xUnit v2 run
+//      Before twice for one test,
 //      and the gate is not re-entrant: the second Before waits the full CultureGate.Timeout
 //      (10 minutes) on the gate the first one took.
 // The scan fails closed: any syntax error, any #define / #undef, and any #if / #elif whose
@@ -148,15 +159,21 @@ namespace BroChoos.Architecture.Tests;
 // allowed, the two parses above see every branch the CI builds compile, in every file, whether or
 // not it mentions CultureGate (deciding "mentions" would itself depend on the active branch).
 //
-// RULE -> PROBE. Each probe is a temporary edit (run by hand). All 68 listed here (41 earlier
-// ones, 18 prefixed a7-, 4 prefixed a8- and 5 prefixed a9-) were run against the current rules. Every probe must
-// turn this test red, except a8-thr-lam, which must stay green (it pins the lambda exemption).
-// Grouped in the order of SOURCES, HOW .. FOUND, THE RULES and the fail-closed paragraph.
+// RULE -> PROBE. Each probe is a temporary edit (run by hand). All 79 listed here (41 earlier
+// ones, 18 prefixed a7-, 4 prefixed a8-, 5 prefixed a9- and 11 prefixed a10-) were run against
+// the current rules. Every probe must turn this test red, except a8-thr-lam, which must stay
+// green (it pins the lambda exemption). Grouped in the order of SOURCES, HOW .. FOUND, THE RULES
+// and the fail-closed paragraph.
 //   sources             F5 (.cs in a nested bin), a7-imp (<Import>), a7-cmp (<Compile Include> of
-//                       a missing file)
+//                       a missing file), a10-tgt (<Target Name="Zz"/>)
 //   using static        a7-uss (using static BroChoos.App.Tests.CultureGate;), a7-usg (<Using
-//                       Include="..CultureGate" Static="true">), a7-bare (bare Gate outside the class),
-//                       a9-usm (<Using Include="System.Math" Static="true">)
+//                       Include="..CultureGate" Static="true">), a7-bare (bare Gate outside the
+//                       class), a9-usm (<Using Include="System.Math" Static="true">), a10-ul
+//                       (<using Include="..CultureGate" Static="true"/>), a10-stu (<Using
+//                       Include="X" STATIC="true"/>), a10-sch (<Using Include="X"><static>true
+//                       </static></Using>), a10-sce (<Using Include="X"><Static>true</Static>
+//                       </Using>), a10-stt (<Using Include="X" Static="True"/>), a10-upd (<Using
+//                       Update="System" Alias="S"/>), a10-ae (<Using Include="X" Alias=""/>)
 //   declarations        nf3 (partial CultureGateState), nf3b (CultureGateState in another file)
 //   1 Gate shapes       g1 (Gate.WaitAsync() in another file), g2 (Gate?.Wait(0)), g3
 //                       (Gate.AvailableWaitHandle), g4 (Func<int, bool> f = Gate.Wait;), g5 (Gate
@@ -172,24 +189,29 @@ namespace BroChoos.Architecture.Tests;
 //                       Action<MethodInfo> TakeGate in Before), a7-m2b (field CultureGate in the
 //                       attribute), b2a / b2b (new Before / After), a7-ovr (public void After, no
 //                       override), d1 (generic TakeGate<T>), b3 (async Before with await), pa2
-//                       (statement after State.Take), a8-thr-top (throw expression before State.Take),
-//                       a8-thr-lam (GREEN: a lambda holding the same throw before State.Take),
-//                       f4a (TakeGate(methodUnderTest ?? throw ..)), f4b (State.Take(holder ?? throw ..)),
-//                       f3a / f3b (using var at the top of Before / TakeGate), a7-l1 (foreach before
-//                       State.Take), d2 (TakeGate<T> method group), F2 (extra TakeGate in After)
+//                       (statement after State.Take), a8-thr-top (throw expression before
+//                       State.Take), a8-thr-lam (GREEN: a lambda holding the same throw before
+//                       State.Take), f4a (TakeGate(methodUnderTest ?? throw ..)), f4b
+//                       (State.Take(holder ?? throw ..)), f3a / f3b (using var at the top of
+//                       Before / TakeGate), a7-l1 (foreach before State.Take), d2 (TakeGate<T>
+//                       method group), F2 (extra TakeGate in After)
 //   4 After             nf5 (return in After), b4 (throw before the releases), b4b (Gate.Release
-//                       moved into the try), r4a (catch clause on After's try), r4b (the two finally
-//                       statements swapped), a7-try2 (extra try in After)
+//                       moved into the try), r4a (catch clause on After's try), r4b (the two
+//                       finally statements swapped), a7-try2 (extra try in After)
 //   5 State / ext.      F3 (State.ToString), m1a / m1b / m1c (extension named like a member),
 //                       b (this CultureGateState), c (extension(CultureGateState))
 //   6 IVT               F4 ([assembly: InternalsVisibleTo]), e (using alias of IVT), a7-ivt
 //                       (<InternalsVisibleTo> item), a (<AssemblyAttribute> IVT), m2
-//                       (<AssemblyAttribute @(..)>), a9-uivt (<Using Include="..InternalsVisibleToAttribute"
-//                       Alias="Ivt">)
-//   7 [CultureIsolated] a8-iso-cls ([CultureIsolated] on a test class), a8-iso-mth ([CultureIsolated]
-//                       on a test method), a9-uiso (<Using Include="..CultureIsolatedAttribute"
-//                       Alias="Iso">), a9-ali (using Iso = ..CultureIsolatedAttribute;), a9-cnt
-//                       (one of the two real [CultureIsolated] usages removed)
+//                       (<AssemblyAttribute @(..)>), a9-uivt (<Using
+//                       Include="..InternalsVisibleToAttribute" Alias="Ivt">), a10-ivt
+//                       (<internalsvisibleto Include="X"/>), a10-aa (<assemblyattribute
+//                       Include="X"/>)
+//   7 [CultureIsolated] a8-iso-cls ([CultureIsolated] on a test class), a8-iso-mth
+//                       ([CultureIsolated] on a test method), a9-uiso (<Using
+//                       Include="..CultureIsolatedAttribute" Alias="Iso">), a9-ali (using Iso =
+//                       ..CultureIsolatedAttribute;), a9-cnt (one of the two real [CultureIsolated]
+//                       usages removed), a10-ali (<Using Include="..CultureIsolatedAttribute"
+//                       alias="Iso"/>)
 //   fail closed         a7-def (#define), a7-ifu (#if UNKNOWN)
 public sealed class CultureGateInvariantTests(ITestOutputHelper output)
 {
@@ -218,6 +240,10 @@ public sealed class CultureGateInvariantTests(ITestOutputHelper output)
 	// An MSBuild <Using> item whose Include or Update contains one of these (ordinal substring, so
 	// CultureIsolatedAttribute and InternalsVisibleToAttribute are covered too) fails the scan.
 	private static readonly string[] UsingBannedNames = [GateType, IsolatedName, "InternalsVisibleTo"];
+
+	// The MSBuild element names the scan acts on, in their canonical spelling; an element matches one
+	// ignoring case (see MsBuildName).
+	private static readonly string[] ScannedElements = ["Import", "Target", "InternalsVisibleTo", "AssemblyAttribute", "Using", "Compile"];
 
 	[Fact]
 	public void CultureGate_IsTakenAndReleasedOnlyOnThePinnedPaths()
@@ -1067,11 +1093,22 @@ public sealed class CultureGateInvariantTests(ITestOutputHelper output)
 			string where = Path.GetRelativePath(root, msbuild);
 			foreach (XElement element in XDocument.Load(msbuild).Descendants())
 			{
+				// Attribute names (Include, Update) are compared case-sensitively, as MSBuild does: a
+				// lowercase include= on an item is just metadata. The element name goes through
+				// MsBuildName (case-insensitive) so that <using>, <COMPILE> and the like match too.
 				string? include = element.Attributes().FirstOrDefault(attribute => attribute.Name.LocalName == "Include")?.Value;
-				switch (element.Name.LocalName)
+				switch (ScannedElements.FirstOrDefault(name => MsBuildName(element.Name.LocalName, name)))
 				{
 					case "Import":
 						violations.Add($"{where}: <Import> (the scan does not follow imported MSBuild files)");
+						break;
+					// A task in a target can create items at build time (<CreateItem ..><Output
+					// TaskParameter="Include" ItemName="Using"/></CreateItem>, or an <ItemGroup> inside the
+					// target), so Using, Compile, InternalsVisibleTo or AssemblyAttribute items could appear
+					// that this static scan never sees. The scanned files hold no <Target> today, so every
+					// target is banned rather than only the item-producing <Output> elements.
+					case "Target":
+						violations.Add($"{where}: <Target> ({element}) is not allowed in the scanned MSBuild files: its tasks could create Using, Compile, InternalsVisibleTo or AssemblyAttribute items at build time, which the scan cannot see");
 						break;
 					case "InternalsVisibleTo":
 						violations.Add($"{where}: an MSBuild <InternalsVisibleTo> item ({element}) would let another assembly reach {GateType} outside this scan");
@@ -1121,11 +1158,23 @@ public sealed class CultureGateInvariantTests(ITestOutputHelper output)
 	}
 
 	// The values of an item's metadata `name`, written as an attribute or as a child element
-	// (matched by local name).
+	// (matched by local name, ignoring case: see MsBuildName).
 	private static IEnumerable<string> UsingMetadata(XElement element, string name)
 	{
-		return element.Attributes().Where(attribute => attribute.Name.LocalName == name).Select(attribute => attribute.Value)
-			.Concat(element.Elements().Where(child => child.Name.LocalName == name).Select(child => child.Value));
+		return element.Attributes().Where(attribute => MsBuildName(attribute.Name.LocalName, name)).Select(attribute => attribute.Value)
+			.Concat(element.Elements().Where(child => MsBuildName(child.Name.LocalName, name)).Select(child => child.Value));
+	}
+
+	// MSBuild item type names and item metadata names are case-insensitive ("Item metadata and
+	// Item/Property names are not case-sensitive", https://learn.microsoft.com/visualstudio/msbuild/item-definitions;
+	// "Metadata name matching is case-insensitive", https://learn.microsoft.com/visualstudio/msbuild/msbuild-items),
+	// so <using .. STATIC="true"/> is the same item as <Using .. Static="true"/>. Attribute names of
+	// the item element itself (Include, Update, Remove) are case-sensitive and are not compared here.
+	// Import and Target are project elements, not items; they are matched ignoring case as well,
+	// which fails closed.
+	private static bool MsBuildName(string actual, string expected)
+	{
+		return actual.Equals(expected, StringComparison.OrdinalIgnoreCase);
 	}
 
 	// The csproj, and each Directory.Build.props / .targets / Directory.Packages.props from the
