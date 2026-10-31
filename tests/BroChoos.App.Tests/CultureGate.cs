@@ -78,29 +78,27 @@ internal static class CultureGate
 //
 // A WAITER THAT STARTED WHILE NOBODY WAS RECORDED AS HOLDER (BeginWait saw Holder == null) also
 // accepts the NEXT acquisition, epoch + 1. That is safe because every Gate.Wait success is
-// followed at once by Take (TakeGate is the only acquisition path), and State.Release runs right
+// followed by Take, with only TakeGate's earlier statements in between (TakeGate is the only
+// acquisition path), and State.Release runs right
 // before Gate.Release. So while Holder is null at epoch e the gate is free, or its holder is
 // between those two release calls, or the next acquirer is between Gate.Wait and Take, and in
 // every case the next acquisition is e + 1. Epoch e + 1 therefore held the gate for the whole wait
-// apart from a window of a few instructions in program order (in wall time that window also
-// includes any OS scheduling delay of the thread running them), and a waiter that lost the race
-// to a holder that hangs names it at once instead of leaving the poison to the next waiter, a
-// further CultureGate.Timeout (10 minutes) later. Epoch e + 2 or later means the gate changed
-// hands during the wait: refused.
+// apart from the window between its Gate.Wait and its Take. That window is TakeGate's statements
+// before Take: building the holder name, setting the AsyncLocal flag, and MarkHolding, which takes
+// the console-capture clock's lock and reads State.Epoch under _lock. It is short but not a few
+// instructions, and in wall time it also includes any lock contention and OS scheduling delay. The
+// e + 1 rule still holds across it: only the gate holder calls Take, so only the holder writes
+// _epoch, and no other acquisition can move the epoch while that acquirer sits in the window. A
+// waiter that lost the race to a holder that hangs names it at once instead of leaving the poison
+// to the next waiter, a further CultureGate.Timeout (10 minutes) later. Epoch e + 2 or later means
+// the gate changed hands during the wait: refused.
 //
 // WHAT PINS THIS. BroChoos.Architecture.Tests/CultureGateInvariantTests parses every source of
-// this project (and every file its MSBuild <Compile Include> items name) with Roslyn, once per CI
-// configuration (Debug and Release), and fails unless, on the syntax tree, in each: Gate outside
-// CultureGate is used only as Gate.CurrentCount, Gate.Wait(..) or Gate.Release(); Wait and Release
-// are called only inside CultureIsolatedAttribute, exactly 2 Wait and 1 Release; each Wait is the
-// whole condition of an if, either "if (Gate.Wait(..))" whose block starts with TakeGate(..), or
-// "if (!Gate.Wait(..))" with no else, whose block ends in throw and whose next statement is
-// TakeGate(..); the attribute declares exactly one TakeGate and one After; the Release takes no
-// arguments and is a direct statement of After's body, right after CultureGate.State.Release()
-// (written out in full, not as a bare State); and CultureGate.State.Take / State.Release are
-// invoked once each, Take as a top-level statement of TakeGate and Release in After. A using
-// static or alias of CultureGate, in source or as an MSBuild <Using> item, also fails it. Comments
-// and string literals are not code to it; reflection is out of its scope.
+// this project with Roslyn, once per CI configuration (Debug and Release). It pins the SHAPE of
+// the call sites: each successful Gate.Wait is followed by TakeGate, which calls State.Take, and
+// After calls State.Release then Gate.Release alone in a finally. It does not prove that the
+// statements it allows (MarkHolding, MarkNotHolding, the flag) never throw, and it does not see
+// reflection. Full rule list: header of CultureGateInvariantTests.
 internal sealed class CultureGateState
 {
 	private readonly Lock _lock = new();
@@ -256,20 +254,39 @@ public sealed class CultureIsolatedAttribute : BeforeAfterTestAttribute
 	// Called only after this test has acquired the gate, on every acquisition path. Taking it
 	// starts a new epoch and clears any poison in the same step (CultureGateState.Take), and the
 	// console-capture per-test bound starts counting from here (ConsoleCaptureTestBound.Clock).
+	//
+	// xUnit v2 (XunitTestInvoker 2.9.2) calls After only for attributes whose Before returned
+	// normally, so anything that throws after Gate.Wait succeeded leaks the gate. TakeGate is
+	// therefore the last statement of Before, and State.Take is the last statement here. The flag
+	// and the clock are set first: only the test body reads the flag, after Before has returned,
+	// and MarkHolding only stores a timestamp tuple under the clock's lock. The epoch Take will
+	// return is State.Epoch + 1, because this test holds the gate and only the holder calls Take
+	// (pinned by CultureGateInvariantTests). If it ever differs, the runner's poison attempt with
+	// it is refused (TryPoisonWhileHeldBy checks the epoch), so the error fails safe.
 	private static void TakeGate(MethodInfo methodUnderTest)
 	{
 		string holder = methodUnderTest.DeclaringType?.FullName + "." + methodUnderTest.Name;
-		long epoch = CultureGate.State.Take(holder);
 		CultureGate.HeldByCurrentTest = true;
-		ConsoleCaptureTestBound.Clock?.MarkHolding(holder, epoch);
+		ConsoleCaptureTestBound.Clock?.MarkHolding(holder, CultureGate.State.Epoch + 1);
+		_ = CultureGate.State.Take(holder);
 	}
 
+	// The releases sit alone in a finally, so nothing in the try block can skip them. If
+	// State.Release itself threw, Gate.Release would be skipped; it only takes a lock and does two
+	// volatile writes, so that case is accepted (see rule 4 in CultureGateInvariantTests). An
+	// over-release would throw SemaphoreFullException here and replace any exception of the try.
 	public override void After(MethodInfo methodUnderTest)
 	{
-		CultureGate.HeldByCurrentTest = false;
-		ConsoleCaptureTestBound.Clock?.MarkNotHolding();
-		CultureGate.State.Release();
-		_ = CultureGate.Gate.Release();
+		try
+		{
+			CultureGate.HeldByCurrentTest = false;
+			ConsoleCaptureTestBound.Clock?.MarkNotHolding();
+		}
+		finally
+		{
+			CultureGate.State.Release();
+			_ = CultureGate.Gate.Release();
+		}
 	}
 }
 
