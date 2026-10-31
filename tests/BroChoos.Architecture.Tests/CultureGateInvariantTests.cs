@@ -48,17 +48,31 @@ namespace BroChoos.Architecture.Tests;
 // Compile, InternalsVisibleTo or AssemblyAttribute items at build time). An MSBuild file can also
 // be imported with no <Import> at all, through a property that feeds the path of an SDK <Import>
 // (CustomAfterMicrosoftCommonTargets, DirectoryBuildTargetsPath, _DirectoryBuildTargetsFile, ..):
-// setting any property in ImportProperties in those files fails the scan. So does setting
-// CompilerResponseFile, CscToolExe or CscToolPath (CompilerProperties), and a DefineConstants
-// value that adds any symbol other than DEBUG or TRACE. A Directory.Build.rsp from the project
-// folder up to the repository root fails too: MSBuild reads the one nearest the ENTRY project
-// (the BroChoos.sln at the root in CI, or this project when it is built directly), and it can
-// pass -p: for any of those properties. An <Analyzer Include=..> item, an item whose
-// OutputItemType names Analyzer (<ProjectReference .. OutputItemType="Analyzer"/>) and an
-// <AddModules> item fail as well: a source generator could emit code the scan cannot see, and a
-// netmodule becomes part of this assembly. Out of scope: analyzers and generators that come from
-// packages (xunit.analyzers arrives that way, transitively), properties set on the command line
-// and environment variables (MSBuild reads every one of them as a property).
+// setting any property in ImportProperties in those files fails the scan, and so does setting
+// any property in TaskAssemblyProperties (they feed the AssemblyFile of an SDK <UsingTask>, so
+// they pick the DLL that runs a task such as Csc). So does setting CompilerResponseFile,
+// CscToolExe or CscToolPath (CompilerProperties), and a DefineConstants value that adds any
+// symbol other than DEBUG or TRACE. SDK targets that compile repository files into obj\*.g.cs
+// are kept off: setting a property in SwitchProperties (UseWPF, UseWindowsForms, UseMaui, the
+// Razor and generator switches, the target framework / platform identity) fails, every
+// <TargetFramework> / <TargetFrameworks> must equal PinnedTargetFramework, the project's Sdk
+// attribute must be exactly Microsoft.NET.Sdk, and a <Sdk> element fails. A Directory.Build.rsp
+// from the project folder up to the repository root fails too: MSBuild reads the one nearest
+// the ENTRY project (the BroChoos.sln at the root in CI, or this project when it is built
+// directly), and it can pass -p: for any of those properties. An <Analyzer Include=..> item, an
+// item whose OutputItemType names Analyzer (<ProjectReference .. OutputItemType="Analyzer"/>), an
+// <AddModules> item, a <FrameworkReference> item (a framework's ref pack can carry analyzers and
+// source generators: Microsoft.AspNetCore.App.Ref ships Microsoft.AspNetCore.App.SourceGenerators),
+// and a <Page> or <ApplicationDefinition> item (the TFM targets Windows, so the SDK imports
+// Microsoft.WinFX.targets, whose MarkupCompilePass1 runs whenever @(Page) or
+// @(ApplicationDefinition) is not empty and writes obj\*.g.cs) fail as well: a source generator
+// could emit code the scan cannot see, and a netmodule becomes part of this assembly. Out of
+// scope: analyzers and generators that come from packages (xunit.analyzers arrives that way,
+// transitively), properties set on the command line and environment variables (MSBuild reads
+// every one of them as a property), and the Generator metadata on <Content>, <None>,
+// <EmbeddedResource> and the like: it names a Visual Studio single-file generator, which only
+// the IDE runs; no .props / .targets file in SDK 10.0.201 reads %(Generator), so a command-line
+// build (CI) never acts on it.
 // The scanned set can be larger than the compiled one: <Compile Remove=..>, a Condition on an
 // item group, or EnableDefaultCompileItems=false drop files from the build that the scan still
 // reads. That only makes the scan stricter. With EnableDefaultCompileItems=false the compiled
@@ -175,11 +189,12 @@ namespace BroChoos.Architecture.Tests;
 // allowed, the two parses above see every branch the CI builds compile, in every file, whether or
 // not it mentions CultureGate (deciding "mentions" would itself depend on the active branch).
 //
-// RULE -> PROBE. Each probe is a temporary edit (run by hand). All 94 listed here (41 earlier
-// ones, 18 prefixed a7-, 4 prefixed a8-, 5 prefixed a9-, 11 prefixed a10-, 6 prefixed a11- and
-// 9 prefixed a12-) were run against the current rules. Every probe must turn this test red,
-// except the five marked GREEN, which must stay green: a8-thr-lam (the lambda exemption),
-// a12-defok, a12-anr, a12-out and a12-rspx (each pins that a rule is no wider than it says).
+// RULE -> PROBE. Each probe is a temporary edit (run by hand). All 107 listed here (41 earlier
+// ones, 18 prefixed a7-, 4 prefixed a8-, 5 prefixed a9-, 11 prefixed a10-, 6 prefixed a11-, 9
+// prefixed a12- and 13 prefixed a13-) were run against the current rules. Every probe must turn
+// this test red, except the seven marked GREEN, which must stay green: a8-thr-lam (the lambda
+// exemption), a12-defok, a12-anr, a12-out, a12-rspx, a13-tfok and a13-oitp (each pins that a
+// rule is no wider than it says).
 // Grouped in the order of SOURCES, HOW .. FOUND, THE RULES and the fail-closed paragraph.
 //   sources             F5 (.cs in a nested bin), a7-imp (<Import>), a7-cmp (<Compile Include> of
 //                       a missing file), a11-cmpl (<compile Include="ZzMissing.cs"/>), a10-tgt
@@ -193,7 +208,17 @@ namespace BroChoos.Architecture.Tests;
 //                       a12-def (<DefineConstants>$(DefineConstants);ZZ), a12-defok (GREEN:
 //                       <DefineConstants>$(DefineConstants);TRACE), a11-anl (<Analyzer
 //                       Include="x.dll"/>), a12-anr (GREEN: <Analyzer Remove="x.dll"/>), a12-pra
-//                       (<ProjectReference Include="x.csproj" OutputItemType="Analyzer"/>)
+//                       (<ProjectReference Include="x.csproj" OutputItemType="Analyzer"/>),
+//                       a13-pram (<ProjectReference Include="x.csproj"><outputitemtype>Analyzer
+//                       </outputitemtype></ProjectReference>), a13-oitp (GREEN:
+//                       <OutputItemType>Analyzer in a PropertyGroup), a13-amod (<AddModules
+//                       Include="x.netmodule"/>), a13-cte (<CscToolExe>x.exe), a13-ctp
+//                       (<CscToolPath>c:\x), a13-defc (<DefineConstants Condition="'$(Configuration)'
+//                       =='Debug'">$(DefineConstants);ZZ), a13-rta (<RoslynTasksAssembly>x.dll),
+//                       a13-wpf (<UseWPF>true), a13-tf (<TargetFramework>net10.0), a13-tfok
+//                       (GREEN: <TargetFramework>net10.0-windows10.0.19041.0), a13-sdk (Project
+//                       Sdk="Microsoft.NET.Sdk.Razor"), a13-fwr (<FrameworkReference
+//                       Include="Microsoft.AspNetCore.App"/>), a13-page (<Page Include="x.xaml"/>)
 //   using static        a7-uss (using static BroChoos.App.Tests.CultureGate;), a7-usg (<Using
 //                       Include="..CultureGate" Static="true">), a7-bare (bare Gate outside the
 //                       class), a9-usm (<Using Include="System.Math" Static="true">), a10-ul
@@ -271,7 +296,7 @@ public sealed class CultureGateInvariantTests(ITestOutputHelper output)
 
 	// The MSBuild element names the scan acts on, in their canonical spelling; an element matches one
 	// ignoring case (see MsBuildName).
-	private static readonly string[] ScannedElements = ["Import", "Target", "Analyzer", "AddModules", "InternalsVisibleTo", "AssemblyAttribute", "Using", "Compile"];
+	private static readonly string[] ScannedElements = ["Import", "Target", "Analyzer", "AddModules", "FrameworkReference", "Page", "ApplicationDefinition", "InternalsVisibleTo", "AssemblyAttribute", "Using", "Compile"];
 
 	// The properties that feed the path of an SDK <Import>. Setting one in a scanned MSBuild file
 	// could import an MSBuild file the scan never reads, with no <Import> of its own
@@ -343,15 +368,63 @@ public sealed class CultureGateInvariantTests(ITestOutputHelper output)
 	// CompilerResponseFile is passed as ResponseFiles: that file can add /define:, /analyzer: or
 	// sources from anywhere. CscToolExe / CscToolPath pick the compiler binary itself. Banned
 	// outright (a property element matches one ignoring case); the repository sets none of them.
-	// DefineConstants is checked by value instead (DefineConstantsSymbols), and the item-based
-	// parameters are handled as items: Analyzers (@(Analyzer), and any item whose OutputItemType
-	// names Analyzer), AddModules (@(AddModules), a netmodule merged into this assembly).
-	// Not banned, because they cannot add code: AdditionalFiles and AnalyzerConfigFiles /
-	// GlobalAnalyzerConfigFiles (inputs that only analyzers read; analyzers are banned above, and
-	// those from packages are out of scope), EmbeddedFiles (copied into the PDB, not compiled),
-	// AdditionalLibPaths (search folders for references, which come only from the reference items
-	// the SDK resolves; a reference is not source, see WHAT IT DOES NOT PIN).
+	// DefineConstants is checked by value instead (in Sources), and the item-based parameters are
+	// handled as items: Analyzers (@(Analyzer), and any item whose OutputItemType names Analyzer),
+	// AddModules (@(AddModules), a netmodule merged into this assembly).
+	// Not banned, because they cannot add code: the Csc parameters AdditionalFiles
+	// (@(AdditionalFiles)) and AnalyzerConfigFiles (@(EditorConfigFiles); the SDK adds each
+	// discovered .editorconfig and each @(GlobalAnalyzerConfigFiles) .globalconfig to that item),
+	// inputs that only analyzers read (analyzers are banned above, and those from packages are out
+	// of scope); EmbeddedFiles (@(EmbeddedFiles), copied into the PDB, not compiled);
+	// AdditionalLibPaths ($(AdditionalLibPaths), search folders for references, which come only
+	// from the reference items the SDK resolves; a reference is not source, see WHAT IT DOES NOT
+	// PIN).
 	private static readonly string[] CompilerProperties = ["CompilerResponseFile", "CscToolExe", "CscToolPath"];
+
+	// The properties that feed the AssemblyFile / AssemblyName / TaskFactory of an SDK <UsingTask>:
+	// they pick the DLL that runs a task, Csc included (RoslynTasksAssembly), so setting one could
+	// run a compiler task the scan never sees. Built like ImportProperties, from the same 86 files:
+	// seed every $(X) in those three attributes of every <UsingTask> (5 names:
+	// DotNetApiCompatTaskAssembly, MicrosoftNETBuildTasksAssembly, RestoreTaskAssemblyFile,
+	// RoslynTasksAssembly, VSTestTaskAssemblyFile), then the same <PropertyGroup> closure. These
+	// are the 8 names it adds to ImportProperties' 87; ImportProperties itself is unchanged.
+	// Ordinal order; a property element matches one ignoring case.
+	private static readonly string[] TaskAssemblyProperties =
+	[
+		"DotNetApiCompatTaskAssembly", "MicrosoftNETBuildTasksAssembly", "MicrosoftNETBuildTasksDirectory",
+		"MicrosoftNETBuildTasksDirectoryRoot", "MicrosoftNETBuildTasksTFM", "RestoreTaskAssemblyFile",
+		"RoslynTasksAssembly", "VSTestTaskAssemblyFile",
+	];
+
+	// Switches that turn on SDK targets which compile repository files into obj\*.g.cs, a folder
+	// the scan does not read: UseWPF / UseWindowsForms (Sdks\Microsoft.NET.Sdk.WindowsDesktop:
+	// XAML Page compilation, x:Code; WPF globbing of **\*.xaml into @(Page)), EnableDefaultPageItems /
+	// EnableDefaultApplicationDefinition (the WindowsDesktop Page / ApplicationDefinition globs),
+	// IncludePackageReferencesDuringMarkupCompilation (the WinFX temporary-assembly pass),
+	// UseMaui, the Razor switches (UsingMicrosoftNETSdkRazor imports the Razor targets from
+	// Microsoft.NET.Sdk.BeforeCommon.targets; UseRazorSourceGenerator; UsingMicrosoftNETSdkWeb and
+	// UsingMicrosoftNETSdkBlazorWebAssembly are set by those SDKs), and the target identity that
+	// PinnedTargetFramework would otherwise not cover (TargetFrameworkIdentifier / ..Version /
+	// ..Moniker, TargetPlatformIdentifier / ..Version: they decide which SDK targets are
+	// imported). Banned outright in a <PropertyGroup> (matched ignoring case); the repository sets
+	// none of them in the scanned files (App.Tests uses Avalonia, not WPF).
+	private static readonly string[] SwitchProperties =
+	[
+		"EnableDefaultApplicationDefinition", "EnableDefaultPageItems",
+		"IncludePackageReferencesDuringMarkupCompilation", "TargetFrameworkIdentifier",
+		"TargetFrameworkMoniker", "TargetFrameworkVersion", "TargetPlatformIdentifier",
+		"TargetPlatformVersion", "UseMaui", "UseRazorSourceGenerator", "UseWPF", "UseWindowsForms",
+		"UsingMicrosoftNETSdkBlazorWebAssembly", "UsingMicrosoftNETSdkRazor", "UsingMicrosoftNETSdkWeb",
+	];
+
+	// The one target framework the CI builds App.Tests for (BroChoos.App.Tests.csproj). Any
+	// <TargetFramework> or <TargetFrameworks> in the scanned files must be exactly this, so a
+	// different TF cannot select other SDK targets; changing the csproj's TF means changing this.
+	private const string PinnedTargetFramework = "net10.0-windows10.0.19041.0";
+
+	// The only Sdk the project may name (Microsoft.NET.Sdk.Razor, .Web or .WindowsDesktop would
+	// import code-generating targets).
+	private const string PinnedSdk = "Microsoft.NET.Sdk";
 
 	[Fact]
 	public void CultureGate_IsTakenAndReleasedOnlyOnThePinnedPaths()
@@ -1211,13 +1284,43 @@ public sealed class CultureGateInvariantTests(ITestOutputHelper output)
 			string where = Path.GetRelativePath(root, msbuild);
 			foreach (XElement element in XDocument.Load(msbuild).Descendants())
 			{
-				// A property that names or switches on an SDK import (ImportProperties) could
+				bool inPropertyGroup = element.Parent is { } group && MsBuildName(group.Name.LocalName, "PropertyGroup");
+				bool inItemGroup = element.Parent is { } items && (MsBuildName(items.Name.LocalName, "ItemGroup") || MsBuildName(items.Name.LocalName, "ItemDefinitionGroup"));
+
+				// A property that feeds the path of an SDK <Import> (ImportProperties) could
 				// pull in an MSBuild file the scan never reads, with no <Import> in the scanned
 				// files.
-				if (element.Parent is { } group && MsBuildName(group.Name.LocalName, "PropertyGroup")
-					&& ImportProperties.Any(name => MsBuildName(element.Name.LocalName, name)))
+				if (inPropertyGroup && ImportProperties.Any(name => MsBuildName(element.Name.LocalName, name)))
 				{
 					violations.Add($"{where}: the property <{element.Name.LocalName}> ({element}) feeds the path of an SDK <Import>; setting it could import an MSBuild file the scan does not read");
+				}
+
+				// A property that feeds the path of an SDK <UsingTask> (TaskAssemblyProperties)
+				// picks the DLL that runs a task, Csc included.
+				if (inPropertyGroup && TaskAssemblyProperties.Any(name => MsBuildName(element.Name.LocalName, name)))
+				{
+					violations.Add($"{where}: the property <{element.Name.LocalName}> ({element}) feeds the AssemblyFile of an SDK <UsingTask>; setting it could run a task DLL, the compiler's included, that the scan does not see");
+				}
+
+				// A switch that turns on SDK targets compiling repository files into
+				// obj\*.g.cs (SwitchProperties).
+				if (inPropertyGroup && SwitchProperties.Any(name => MsBuildName(element.Name.LocalName, name)))
+				{
+					violations.Add($"{where}: the property <{element.Name.LocalName}> ({element}) switches on SDK targets that can generate code into obj\\*.g.cs, which the scan does not read");
+				}
+
+				// The target framework is pinned: another one could select other SDK targets.
+				if (inPropertyGroup && (MsBuildName(element.Name.LocalName, "TargetFramework") || MsBuildName(element.Name.LocalName, "TargetFrameworks"))
+					&& element.Value.Trim() != PinnedTargetFramework)
+				{
+					violations.Add($"{where}: <{element.Name.LocalName}> ({element}) must be exactly {PinnedTargetFramework}; another target framework could select SDK targets the scan was not written for");
+				}
+
+				// The SDK is pinned, by the Project's Sdk attribute and with no <Sdk> element.
+				if (MsBuildName(element.Name.LocalName, "Sdk")
+					|| (element.Parent is null && element.Attribute("Sdk") is { } sdk && sdk.Value.Trim() != PinnedSdk))
+				{
+					violations.Add($"{where}: an SDK other than exactly {PinnedSdk} ({element.Name.LocalName}) is not allowed in the scanned MSBuild files: Razor, Web or WindowsDesktop targets can generate code the scan does not read");
 				}
 
 				// Csc parameters that can add code the scan does not see (CompilerProperties).
@@ -1236,14 +1339,15 @@ public sealed class CultureGateInvariantTests(ITestOutputHelper output)
 					&& element.Value.Split([';', ',']).Select(part => part.Trim())
 						.Any(part => part.Length > 0 && part != "$(DefineConstants)" && !KnownSymbols.Contains(part, StringComparer.Ordinal)))
 				{
-					violations.Add($"{where}: <DefineConstants> ({element}) adds a symbol other than {string.Join(" / ", KnownSymbols)}; the scan parses only those, so code under the new symbol would go unseen");
+					violations.Add($"{where}: <DefineConstants> ({element}) adds a symbol other than {string.Join(" / ", KnownSymbols)}; this check is defence in depth: the preprocessor rule already fails any #if / #elif on another symbol, and it fails here as well so the build and the scan agree on the symbol set");
 				}
 
 				// A <ProjectReference .. OutputItemType="Analyzer"/> (or any item whose
 				// OutputItemType names Analyzer, as an attribute or as child metadata, in any
 				// letter case) feeds its output to the compiler as an analyzer. A computed value
-				// could resolve to Analyzer, so it fails too.
-				if (UsingMetadata(element, "OutputItemType").Any(value => value.Contains("Analyzer", StringComparison.OrdinalIgnoreCase) || ComputedValue.Any(value.Contains)))
+				// could resolve to Analyzer, so it fails too. Only items count: an element
+				// directly inside an <ItemGroup> or <ItemDefinitionGroup>.
+				if (inItemGroup && UsingMetadata(element, "OutputItemType").Any(value => value.Contains("Analyzer", StringComparison.OrdinalIgnoreCase) || ComputedValue.Any(value.Contains)))
 				{
 					violations.Add($"{where}: an item with OutputItemType naming Analyzer ({element}) is not allowed in the scanned MSBuild files: a source generator could emit code the scan cannot see");
 				}
@@ -1272,6 +1376,19 @@ public sealed class CultureGateInvariantTests(ITestOutputHelper output)
 					// never reads.
 					case "AddModules" when !IsPureRemove(element):
 						violations.Add($"{where}: an MSBuild <AddModules> item ({element}) is not allowed in the scanned MSBuild files: the module's code would join this assembly unseen");
+						break;
+					// A framework's ref pack can carry analyzers and source generators
+					// (Microsoft.AspNetCore.App.Ref ships Microsoft.AspNetCore.App.SourceGenerators).
+					// The scanned files hold none today; the SDK's implicit Microsoft.NETCore.App
+					// reference does not come from them.
+					case "FrameworkReference" when !IsPureRemove(element):
+						violations.Add($"{where}: an MSBuild <FrameworkReference> item ({element}) is not allowed in the scanned MSBuild files: its ref pack could add analyzers or source generators that emit code the scan cannot see");
+						break;
+					// The TFM targets Windows, so Microsoft.WinFX.targets is imported, and its
+					// MarkupCompilePass1 runs whenever @(Page) or @(ApplicationDefinition) is not
+					// empty, compiling XAML (x:Code included) into obj\*.g.cs.
+					case "Page" or "ApplicationDefinition" when !IsPureRemove(element):
+						violations.Add($"{where}: an MSBuild <{element.Name.LocalName}> item ({element}) is not allowed in the scanned MSBuild files: XAML markup compilation would generate code into obj\\*.g.cs, which the scan does not read");
 						break;
 					// A task in a target can create items at build time (<CreateItem ..><Output
 					// TaskParameter="Include" ItemName="Using"/></CreateItem>, or an <ItemGroup> inside the
