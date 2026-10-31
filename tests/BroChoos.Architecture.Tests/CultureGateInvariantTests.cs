@@ -46,13 +46,19 @@ namespace BroChoos.Architecture.Tests;
 // $(, @(, %(, * , ? or ; cannot be resolved here and fails the scan, so does a missing file, any
 // <Import> and any <Target> in those MSBuild files (a task in a target could create Using,
 // Compile, InternalsVisibleTo or AssemblyAttribute items at build time). An MSBuild file can also
-// be imported with no <Import> at all, through a property the SDK reads in an <Import> path or
-// condition (CustomAfterMicrosoftCommonTargets, DirectoryBuildTargetsPath, ..): setting any
-// property in ImportProperties in those files fails the scan, and so does a Directory.Build.rsp
-// from the project folder up to the repository root or any *.rsp in the project folder (a
-// response file can pass -p: for them). An <Analyzer> item fails too: a source generator could
-// emit code the scan cannot see. Out of scope: analyzers and generators that come from packages
-// (xunit.analyzers arrives that way, transitively) and properties set on the command line.
+// be imported with no <Import> at all, through a property that feeds the path of an SDK <Import>
+// (CustomAfterMicrosoftCommonTargets, DirectoryBuildTargetsPath, _DirectoryBuildTargetsFile, ..):
+// setting any property in ImportProperties in those files fails the scan. So does setting
+// CompilerResponseFile, CscToolExe or CscToolPath (CompilerProperties), and a DefineConstants
+// value that adds any symbol other than DEBUG or TRACE. A Directory.Build.rsp from the project
+// folder up to the repository root fails too: MSBuild reads the one nearest the ENTRY project
+// (the BroChoos.sln at the root in CI, or this project when it is built directly), and it can
+// pass -p: for any of those properties. An <Analyzer Include=..> item, an item whose
+// OutputItemType names Analyzer (<ProjectReference .. OutputItemType="Analyzer"/>) and an
+// <AddModules> item fail as well: a source generator could emit code the scan cannot see, and a
+// netmodule becomes part of this assembly. Out of scope: analyzers and generators that come from
+// packages (xunit.analyzers arrives that way, transitively), properties set on the command line
+// and environment variables (MSBuild reads every one of them as a property).
 // The scanned set can be larger than the compiled one: <Compile Remove=..>, a Condition on an
 // item group, or EnableDefaultCompileItems=false drop files from the build that the scan still
 // reads. That only makes the scan stricter. With EnableDefaultCompileItems=false the compiled
@@ -169,17 +175,25 @@ namespace BroChoos.Architecture.Tests;
 // allowed, the two parses above see every branch the CI builds compile, in every file, whether or
 // not it mentions CultureGate (deciding "mentions" would itself depend on the active branch).
 //
-// RULE -> PROBE. Each probe is a temporary edit (run by hand). All 85 listed here (41 earlier
-// ones, 18 prefixed a7-, 4 prefixed a8-, 5 prefixed a9-, 11 prefixed a10- and 6 prefixed a11-)
-// were run against the current rules. Every probe must turn this test red, except a8-thr-lam,
-// which must stay green (it pins the lambda exemption). Grouped in the order of SOURCES,
-// HOW .. FOUND, THE RULES and the fail-closed paragraph.
+// RULE -> PROBE. Each probe is a temporary edit (run by hand). All 94 listed here (41 earlier
+// ones, 18 prefixed a7-, 4 prefixed a8-, 5 prefixed a9-, 11 prefixed a10-, 6 prefixed a11- and
+// 9 prefixed a12-) were run against the current rules. Every probe must turn this test red,
+// except the five marked GREEN, which must stay green: a8-thr-lam (the lambda exemption),
+// a12-defok, a12-anr, a12-out and a12-rspx (each pins that a rule is no wider than it says).
+// Grouped in the order of SOURCES, HOW .. FOUND, THE RULES and the fail-closed paragraph.
 //   sources             F5 (.cs in a nested bin), a7-imp (<Import>), a7-cmp (<Compile Include> of
 //                       a missing file), a11-cmpl (<compile Include="ZzMissing.cs"/>), a10-tgt
 //                       (<Target Name="Zz"/>), a11-cact (<CustomAfterMicrosoftCommonTargets>),
 //                       a11-cacl (<customaftermicrosoftcommontargets>), a11-dbtp
-//                       (<DirectoryBuildTargetsPath>), a11-rsp (Directory.Build.rsp in the
-//                       project folder), a11-anl (<Analyzer Include="x.dll"/>)
+//                       (<DirectoryBuildTargetsPath>), a12-dbtf (<_DirectoryBuildTargetsFile>
+//                       Zz.targets in Directory.Build.props), a12-out (GREEN: <OutputType>Exe in
+//                       Directory.Build.props), a11-rsp (Directory.Build.rsp in the project
+//                       folder), a12-rsr (Directory.Build.rsp at the repository root), a12-rspx
+//                       (GREEN: Zz.rsp in the project folder), a12-crf (<CompilerResponseFile>),
+//                       a12-def (<DefineConstants>$(DefineConstants);ZZ), a12-defok (GREEN:
+//                       <DefineConstants>$(DefineConstants);TRACE), a11-anl (<Analyzer
+//                       Include="x.dll"/>), a12-anr (GREEN: <Analyzer Remove="x.dll"/>), a12-pra
+//                       (<ProjectReference Include="x.csproj" OutputItemType="Analyzer"/>)
 //   using static        a7-uss (using static BroChoos.App.Tests.CultureGate;), a7-usg (<Using
 //                       Include="..CultureGate" Static="true">), a7-bare (bare Gate outside the
 //                       class), a9-usm (<Using Include="System.Math" Static="true">), a10-ul
@@ -257,69 +271,87 @@ public sealed class CultureGateInvariantTests(ITestOutputHelper output)
 
 	// The MSBuild element names the scan acts on, in their canonical spelling; an element matches one
 	// ignoring case (see MsBuildName).
-	private static readonly string[] ScannedElements = ["Import", "Target", "Analyzer", "InternalsVisibleTo", "AssemblyAttribute", "Using", "Compile"];
+	private static readonly string[] ScannedElements = ["Import", "Target", "Analyzer", "AddModules", "InternalsVisibleTo", "AssemblyAttribute", "Using", "Compile"];
 
-	// Properties the SDK reads inside an <Import> element, in its Project path or in its Condition.
-	// Setting one in a scanned MSBuild file could pull in, or switch on, an MSBuild file the scan
-	// never reads, with no <Import> of its own. Collected from .NET SDK 10.0.201 by taking every
-	// $(Name) inside an <Import ..> element of Current\Microsoft.Common.props,
-	// Microsoft.Common.targets, Microsoft.Common.CurrentVersion.targets,
+	// The properties that feed the path of an SDK <Import>. Setting one in a scanned MSBuild file
+	// could import an MSBuild file the scan never reads, with no <Import> of its own
+	// (<_DirectoryBuildTargetsFile>Zz.targets</..> in Directory.Build.props makes the SDK import
+	// Zz.targets). A property element matches one ignoring case. Ordinal order.
+	// HOW THE LIST WAS BUILT, from .NET SDK 10.0.201: a transitive closure over these files:
+	// Current\Microsoft.Common.props, every *.props / *.targets under Current\ (the ImportAfter
+	// folders), Microsoft.Common.targets, Microsoft.Common.CurrentVersion.targets,
 	// Microsoft.Common.CrossTargeting.targets, Microsoft.CSharp.targets,
-	// Microsoft.CSharp.CurrentVersion.targets and every *.props / *.targets under
-	// Sdks\Microsoft.NET.Sdk (Sdk.props, Sdk.targets and the chain they import). Ordinal order.
-	// Reserved names in the list (MSBuildProjectFile and the like) cannot be set at all; they stay
-	// so that the list is the whole SDK set. A property element matches one ignoring case.
+	// Microsoft.CSharp.CurrentVersion.targets, Roslyn\Microsoft.CSharp.Core.targets, NuGet.props,
+	// NuGet.targets and every *.props / *.targets under Sdks\Microsoft.NET.Sdk (86 files).
+	// Seed: every $(X) in the Project attribute of an <Import> (56 names). Step: for each name in
+	// the set, every $(Y) in the text of any <Name>..</Name> inside a <PropertyGroup> of those files
+	// joins the set (BaseIntermediateOutputPath feeds MSBuildProjectExtensionsPath, which names the
+	// obj\*.nuget.g.props / .targets imports; _DirectoryBuildTargetsFile feeds
+	// DirectoryBuildTargetsPath). Repeated until nothing new was added: 87 names.
+	// LEFT OUT: the 54 names read only in an <Import> Condition. Each is an on/off switch or an
+	// identity value (OutputType, TargetFrameworkIdentifier, TargetFrameworkVersion,
+	// EnableNETAnalyzers, Language, PublishAot, UseArtifactsOutput, ..) that only chooses among
+	// files shipped with the SDK, so it cannot bring repository code into the build. The Import*
+	// switches were judged one by one and left out too: ImportDirectoryBuildProps,
+	// ImportDirectoryBuildTargets and ImportDirectoryPackagesProps only drop repository files the
+	// scan reads anyway (the scan reads them whether or not they are imported);
+	// ImportProjectExtensionProps / ..Targets only drop the obj\*.nuget.g.* files (out of scope,
+	// rule 6); ImportByWildcard* / ImportUserLocationsByWildcard* default to true and only drop
+	// the SDK's ImportBefore / ImportAfter files and the user-profile extension folders (outside the
+	// repository, machine set-up); ImportXamlTargets, ImportNuGetBuildTasksPackTargetsFromSdk and
+	// ImportFrameworkWinFXTargets only switch on files that ship with the SDK. Reserved names in
+	// the list (MSBuildProjectFile and the like) cannot be set at all; they stay so that the list
+	// is the whole closure.
 	private static readonly string[] ImportProperties =
 	[
 		"AfterMicrosoftNETSdkTargets", "AfterMicrosoftNetSdkProps",
-		"AfterTargetFrameworkInferenceTargets", "AlternateCommonProps", "ArtifactsPath",
+		"AfterTargetFrameworkInferenceTargets", "AlternateCommonProps", "AppDesignerFolder",
+		"ArtifactsPath", "ArtifactsProjectName", "BaseIntermediateOutputPath",
 		"BeforeMicrosoftNETSdkTargets", "BeforeTargetFrameworkInferenceTargets",
 		"CSharpCoreTargetsPath", "CSharpDesignTimeTargetsPath", "CSharpTargetsPath",
-		"CodeAnalysisTargets", "CommonTargetsPath", "CustomAfterDirectoryBuildProps",
-		"CustomAfterDirectoryBuildTargets", "CustomAfterMicrosoftCSharpTargets",
-		"CustomAfterMicrosoftCommonCrossTargetingTargets", "CustomAfterMicrosoftCommonProps",
-		"CustomAfterMicrosoftCommonTargets", "CustomBeforeDirectoryBuildProps",
-		"CustomBeforeDirectoryBuildTargets", "CustomBeforeMicrosoftCSharpTargets",
-		"CustomBeforeMicrosoftCommonCrossTargetingTargets", "CustomBeforeMicrosoftCommonProps",
-		"CustomBeforeMicrosoftCommonTargets", "DirectoryBuildPropsPath",
-		"DirectoryBuildTargetsPath", "DisableStandardFrameworkResolution",
-		"EnableAppxPackageTargetsForUwpClassLibraries", "EnableNETAnalyzers",
+		"CodeAnalysisTargets", "CommonTargetsPath", "ComposeWorkingDir",
+		"CustomAfterDirectoryBuildProps", "CustomAfterDirectoryBuildTargets",
+		"CustomAfterMicrosoftCSharpTargets", "CustomAfterMicrosoftCommonCrossTargetingTargets",
+		"CustomAfterMicrosoftCommonProps", "CustomAfterMicrosoftCommonTargets",
+		"CustomBeforeDirectoryBuildProps", "CustomBeforeDirectoryBuildTargets",
+		"CustomBeforeMicrosoftCSharpTargets", "CustomBeforeMicrosoftCommonCrossTargetingTargets",
+		"CustomBeforeMicrosoftCommonProps", "CustomBeforeMicrosoftCommonTargets",
+		"DirectoryBuildPropsPath", "DirectoryBuildTargetsPath", "DirectoryPackagesPropsPath",
 		"FSharpDesignTimeTargetsPath", "FSharpOverridesTargetsShim", "FSharpPropsShim",
-		"FSharpTargetsShim", "ILCompilerTargetsPath", "ILLinkTargetsPath",
-		"ImportByWildcardAfterMicrosoftCSharpTargets",
-		"ImportByWildcardAfterMicrosoftCommonCrossTargetingTargets",
-		"ImportByWildcardAfterMicrosoftCommonProps",
-		"ImportByWildcardAfterMicrosoftCommonTargets",
-		"ImportByWildcardBeforeMicrosoftCSharpTargets",
-		"ImportByWildcardBeforeMicrosoftCommonCrossTargetingTargets",
-		"ImportByWildcardBeforeMicrosoftCommonProps",
-		"ImportByWildcardBeforeMicrosoftCommonTargets", "ImportDirectoryBuildProps",
-		"ImportDirectoryBuildTargets", "ImportNuGetBuildTasksPackTargetsFromSdk",
-		"ImportProjectExtensionProps", "ImportProjectExtensionTargets",
-		"ImportUserLocationsByWildcardAfterMicrosoftCSharpTargets",
-		"ImportUserLocationsByWildcardAfterMicrosoftCommonProps",
-		"ImportUserLocationsByWildcardAfterMicrosoftCommonTargets",
-		"ImportUserLocationsByWildcardBeforeMicrosoftCSharpTargets",
-		"ImportUserLocationsByWildcardBeforeMicrosoftCommonProps",
-		"ImportUserLocationsByWildcardBeforeMicrosoftCommonTargets", "ImportXamlTargets",
-		"IsCrossTargetingBuild", "IsRestoreTargetsFileLoaded", "Language", "LanguageTargets",
-		"MSBuildEnableWorkloadResolver", "MSBuildExtensionsPath", "MSBuildProjectExtension",
+		"FSharpTargetsShim", "ILCompilerTargetsPath", "ILLinkTargetsPath", "LanguageTargets",
+		"MSBuildExtensionsPath", "MSBuildExtensionsPath32", "MSBuildProjectDirectory",
 		"MSBuildProjectExtensionsPath", "MSBuildProjectFile", "MSBuildProjectFullPath",
-		"MSBuildRuntimeType", "MSBuildThisFileDirectory", "MSBuildToolsPath",
-		"MSBuildToolsVersion", "MSBuildUserExtensionsPath",
-		"MicrosoftCommonPropsHasBeenImported", "MsAppxPackageTargets", "MsTestToolsTargets",
+		"MSBuildProjectName", "MSBuildSDKsPath", "MSBuildThisFile", "MSBuildThisFileDirectory",
+		"MSBuildToolsPath", "MSBuildToolsVersion", "MSBuildUserExtensionsPath",
+		"MicrosoftNETBuildExtensionsTargets", "MsAppxPackageTargets", "MsTestToolsTargets",
 		"NETCoreSdkBundledCliToolsProps", "NETCoreSdkBundledMSBuildInformationProps",
-		"NETCoreSdkBundledVersionsProps", "NuGetBuildTasksPackTargets", "NuGetPropsFile",
-		"NuGetRestoreTargets", "OutputType", "PackAsTool", "PublishAot",
-		"PublishProfileImported", "PublishProtocol", "ReportingServicesTargets",
-		"SuppressImplicitGitSourceLink", "TargetFrameworkIdentifier", "TargetFrameworkVersion",
-		"TargetPlatformIdentifier", "TargetRuntime", "UseArtifactsOutput",
-		"UseBundledFSharpTargets", "UseMSBuildTestInfrastructure", "UseUwpTools",
-		"UsingMicrosoftNETSdkRazor", "UsingNETSdkDefaults", "WebPublishProfileFile",
-		"WindowsAppContainer", "_ContainersTargetsDir", "_DefaultArtifactsPathPropsImported",
-		"_EnablePackageReferencesInVCProjects", "_IsNotSetContainersTargetsDir",
-		"_SourceLinkPropsImported", "_SourceLinkSdkSubDir", "_TargetFrameworkVersionWithoutV",
+		"NETCoreSdkBundledVersionsProps", "NETCoreSdkVersion", "NuGetBuildTasksPackTargets",
+		"NuGetPackageRoot", "NuGetPropsFile", "NuGetRestoreTargets",
+		"ProjectExtensionsPathForSpecifiedProject", "PublishProfile", "PublishProfileFullPath",
+		"PublishProfileName", "ReportingServicesTargets", "RoslynTargetsPath", "StorePackageName",
+		"StorePackageVersion", "StorePackageVersionForFolderName", "StoreWorkerWorkingDir", "TEMP",
+		"VSTestTargets", "VisualStudioVersion", "WebPublishProfileFile", "_ContainersTargetsDir",
+		"_DirectoryBuildPropsBasePath", "_DirectoryBuildPropsFile",
+		"_DirectoryBuildTargetsBasePath", "_DirectoryBuildTargetsFile",
+		"_DirectoryPackagesPropsBasePath", "_DirectoryPackagesPropsFile",
+		"_PublishProfileDesignerFolder", "_PublishProfileRootFolder", "_RandomFileName",
+		"_SourceLinkSdkSubDir",
 	];
+
+	// Csc task parameters (Roslyn\Microsoft.CSharp.Core.targets, CoreCompile) that come from a
+	// property and can bring code into the compilation that the scan does not see.
+	// CompilerResponseFile is passed as ResponseFiles: that file can add /define:, /analyzer: or
+	// sources from anywhere. CscToolExe / CscToolPath pick the compiler binary itself. Banned
+	// outright (a property element matches one ignoring case); the repository sets none of them.
+	// DefineConstants is checked by value instead (DefineConstantsSymbols), and the item-based
+	// parameters are handled as items: Analyzers (@(Analyzer), and any item whose OutputItemType
+	// names Analyzer), AddModules (@(AddModules), a netmodule merged into this assembly).
+	// Not banned, because they cannot add code: AdditionalFiles and AnalyzerConfigFiles /
+	// GlobalAnalyzerConfigFiles (inputs that only analyzers read; analyzers are banned above, and
+	// those from packages are out of scope), EmbeddedFiles (copied into the PDB, not compiled),
+	// AdditionalLibPaths (search folders for references, which come only from the reference items
+	// the SDK resolves; a reference is not source, see WHAT IT DOES NOT PIN).
+	private static readonly string[] CompilerProperties = ["CompilerResponseFile", "CscToolExe", "CscToolPath"];
 
 	[Fact]
 	public void CultureGate_IsTakenAndReleasedOnlyOnThePinnedPaths()
@@ -1164,12 +1196,14 @@ public sealed class CultureGateInvariantTests(ITestOutputHelper output)
 			.Where(path => Path.GetRelativePath(project, path).Split(Path.DirectorySeparatorChar) is var segments
 				&& !(segments.Length > 1 && segments[0] is "bin" or "obj"))];
 
-		// A response file can pass -p:Name=Value for any of ImportProperties (and more) on every
-		// build. MSBuild reads Directory.Build.rsp from the project folder upwards; any *.rsp in
-		// the project folder is banned too.
+		// A Directory.Build.rsp can pass -p:Name=Value for any of ImportProperties (and more) on
+		// every command-line build. MSBuild reads the one nearest the ENTRY project: CI builds
+		// BroChoos.sln from the repository root, so one at the root applies there, and one in a
+		// folder between the root and this project applies when the project is built directly.
+		// Any other *.rsp is never read automatically and is not checked.
 		foreach (string rsp in ResponseFiles(root, project))
 		{
-			violations.Add($"{Path.GetRelativePath(root, rsp)}: a response file could set MSBuild properties the scan cannot see; remove it");
+			violations.Add($"{Path.GetRelativePath(root, rsp)}: a Directory.Build.rsp could set MSBuild properties the scan cannot see; remove it");
 		}
 
 		foreach (string msbuild in MsBuildFiles(root, project))
@@ -1183,7 +1217,35 @@ public sealed class CultureGateInvariantTests(ITestOutputHelper output)
 				if (element.Parent is { } group && MsBuildName(group.Name.LocalName, "PropertyGroup")
 					&& ImportProperties.Any(name => MsBuildName(element.Name.LocalName, name)))
 				{
-					violations.Add($"{where}: the property <{element.Name.LocalName}> ({element}) is read by an SDK <Import>; setting it could import an MSBuild file the scan does not read");
+					violations.Add($"{where}: the property <{element.Name.LocalName}> ({element}) feeds the path of an SDK <Import>; setting it could import an MSBuild file the scan does not read");
+				}
+
+				// Csc parameters that can add code the scan does not see (CompilerProperties).
+				if (element.Parent is { } compilerGroup && MsBuildName(compilerGroup.Name.LocalName, "PropertyGroup")
+					&& CompilerProperties.Any(name => MsBuildName(element.Name.LocalName, name)))
+				{
+					violations.Add($"{where}: the property <{element.Name.LocalName}> ({element}) is passed to the compiler and could add sources, analyzers or symbols the scan cannot see");
+				}
+
+				// The fail-closed preprocessor rule allows only DEBUG and TRACE, which the SDK
+				// defines itself. A DefineConstants value may keep the inherited
+				// $(DefineConstants) and name DEBUG or TRACE; any other part (a new symbol, or a
+				// computed value) is a violation.
+				if (element.Parent is { } defineGroup && MsBuildName(defineGroup.Name.LocalName, "PropertyGroup")
+					&& MsBuildName(element.Name.LocalName, "DefineConstants")
+					&& element.Value.Split([';', ',']).Select(part => part.Trim())
+						.Any(part => part.Length > 0 && part != "$(DefineConstants)" && !KnownSymbols.Contains(part, StringComparer.Ordinal)))
+				{
+					violations.Add($"{where}: <DefineConstants> ({element}) adds a symbol other than {string.Join(" / ", KnownSymbols)}; the scan parses only those, so code under the new symbol would go unseen");
+				}
+
+				// A <ProjectReference .. OutputItemType="Analyzer"/> (or any item whose
+				// OutputItemType names Analyzer, as an attribute or as child metadata, in any
+				// letter case) feeds its output to the compiler as an analyzer. A computed value
+				// could resolve to Analyzer, so it fails too.
+				if (UsingMetadata(element, "OutputItemType").Any(value => value.Contains("Analyzer", StringComparison.OrdinalIgnoreCase) || ComputedValue.Any(value.Contains)))
+				{
+					violations.Add($"{where}: an item with OutputItemType naming Analyzer ({element}) is not allowed in the scanned MSBuild files: a source generator could emit code the scan cannot see");
 				}
 
 				// Attribute names (Include, Update) are compared case-sensitively. MSBuild
@@ -1201,9 +1263,15 @@ public sealed class CultureGateInvariantTests(ITestOutputHelper output)
 						break;
 					// An analyzer or source generator runs inside the compiler and can add
 					// sources the scan never sees. Analyzers that come from packages are out of
-					// scope (SOURCES).
-					case "Analyzer":
+					// scope (SOURCES). A pure <Analyzer Remove=..> only drops one, so it passes;
+					// Include, Update or anything else fails.
+					case "Analyzer" when !IsPureRemove(element):
 						violations.Add($"{where}: an MSBuild <Analyzer> item ({element}) is not allowed in the scanned MSBuild files: a source generator could emit code the scan cannot see");
+						break;
+					// Csc AddModules: a netmodule is merged into this assembly, code the scan
+					// never reads.
+					case "AddModules" when !IsPureRemove(element):
+						violations.Add($"{where}: an MSBuild <AddModules> item ({element}) is not allowed in the scanned MSBuild files: the module's code would join this assembly unseen");
 						break;
 					// A task in a target can create items at build time (<CreateItem ..><Output
 					// TaskParameter="Include" ItemName="Using"/></CreateItem>, or an <ItemGroup> inside the
@@ -1268,6 +1336,13 @@ public sealed class CultureGateInvariantTests(ITestOutputHelper output)
 			.Concat(element.Elements().Where(child => MsBuildName(child.Name.LocalName, name)).Select(child => child.Value));
 	}
 
+	// An item that only removes: a Remove attribute and no Include or Update (attribute names are
+	// case-sensitive, see Sources).
+	private static bool IsPureRemove(XElement element)
+	{
+		return element.Attribute("Remove") is not null && element.Attribute("Include") is null && element.Attribute("Update") is null;
+	}
+
 	// MSBuild item type names and item metadata names are case-insensitive ("Item metadata and
 	// Item/Property names are not case-sensitive", https://learn.microsoft.com/visualstudio/msbuild/item-definitions;
 	// "Metadata name matching is case-insensitive", https://learn.microsoft.com/visualstudio/msbuild/msbuild-items),
@@ -1299,11 +1374,10 @@ public sealed class CultureGateInvariantTests(ITestOutputHelper output)
 		}
 	}
 
-	// Every *.rsp in the project folder, and each Directory.Build.rsp from the project folder up to
-	// the repository root.
+	// Each Directory.Build.rsp from the project folder up to the repository root.
 	private static IEnumerable<string> ResponseFiles(string root, string project)
 	{
-		IEnumerable<string> found = Directory.EnumerateFiles(project, "*.rsp", SearchOption.TopDirectoryOnly);
+		IEnumerable<string> found = [];
 		for (DirectoryInfo? directory = new(project); directory is not null; directory = directory.Parent)
 		{
 			found = found.Concat(directory.EnumerateFiles("Directory.Build.rsp").Select(file => file.FullName));
