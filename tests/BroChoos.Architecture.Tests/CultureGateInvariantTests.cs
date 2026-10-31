@@ -54,14 +54,16 @@ namespace BroChoos.Architecture.Tests;
 // CscToolExe or CscToolPath (CompilerProperties), and a DefineConstants value that adds any
 // symbol other than DEBUG or TRACE. SDK targets that compile repository files into obj\*.g.cs
 // are kept off: setting a property in SwitchProperties (UseWPF, UseWindowsForms, UseMaui, the
-// Razor and generator switches, the target framework / platform identity) fails, every
+// Razor and generator switches, the ImportWindowsDesktopTargets and ImportXamlTargets switches,
+// the target framework / platform identity) fails, every
 // <TargetFramework> / <TargetFrameworks> must equal PinnedTargetFramework, the project's Sdk
 // attribute must be Microsoft.NET.Sdk (compared ignoring case, as MSBuild resolves SDK names, but
 // with no version and no list of SDKs), and a <Sdk> element fails. Avalonia XAML is kept off as
-// well: an <AvaloniaXaml> or <AvaloniaResource> item fails, and so does any *.axaml file under
-// the project (only the project-root bin and obj folders are excluded), because Avalonia's
-// XamlIl compiler and Avalonia.Generators turn them into code the scan cannot see (the default
-// Avalonia globs pick up **\*.axaml with no item in the scanned files). A Directory.Build.rsp
+// well: an <AvaloniaXaml> or <AvaloniaResource> item fails, and so does any *.axaml or *.paml
+// file under the project (only the project-root bin and obj folders are excluded), because
+// Avalonia's XamlIl compiler and Avalonia.Generators turn them into code the scan cannot see (the
+// default globs in Avalonia 11.3.18's buildTransitive\AvaloniaBuildTasks.props pick up
+// **\*.axaml and **\*.paml with no item in the scanned files). A Directory.Build.rsp
 // from the project folder up to the repository root fails too: MSBuild reads the one nearest
 // the ENTRY project (the BroChoos.sln at the root in CI, or this project when it is built
 // directly), and it can pass -p: for any of those properties. An <Analyzer Include=..> item, an
@@ -194,11 +196,12 @@ namespace BroChoos.Architecture.Tests;
 // allowed, the two parses above see every branch the CI builds compile, in every file, whether or
 // not it mentions CultureGate (deciding "mentions" would itself depend on the active branch).
 //
-// RULE -> PROBE. Each probe is a temporary edit (run by hand). All 115 listed here (41 earlier
+// RULE -> PROBE. Each probe is a temporary edit (run by hand). All 119 listed here (41 earlier
 // ones, 18 prefixed a7-, 4 prefixed a8-, 5 prefixed a9-, 11 prefixed a10-, 6 prefixed a11-, 9
-// prefixed a12-, 13 prefixed a13- and 8 prefixed a14-) were run against the current rules. Every
-// probe must turn this test red, except the eight marked GREEN, which must stay green: a8-thr-lam
-// (the lambda exemption), a12-defok, a12-anr, a12-out, a12-rspx, a13-tfok, a13-oitp and a14-sdkl
+// prefixed a12-, 13 prefixed a13-, 8 prefixed a14- and 4 prefixed a15-) were run against the
+// current rules. Every probe must turn this test red, except the nine marked GREEN, which must
+// stay green: a8-thr-lam (the lambda exemption), a12-defok, a12-anr, a12-out, a12-rspx, a13-tfok,
+// a13-oitp, a14-sdkl and a15-avxr
 // (each pins that a rule is no wider than it says).
 // Grouped in the order of SOURCES, HOW .. FOUND, THE RULES and the fail-closed paragraph.
 //   sources             F5 (.cs in a nested bin), a7-imp (<Import>), a7-cmp (<Compile Include> of
@@ -230,7 +233,9 @@ namespace BroChoos.Architecture.Tests;
 //                       Include="x.axaml"/>), a14-axf (an empty Zz.axaml in the project folder),
 //                       a14-iwdt (<ImportWindowsDesktopTargets>true), a14-ixt
 //                       (<ImportXamlTargets>true), a14-tfm (<TargetFramework>net10.0; the message
-//                       names PinnedTargetFramework)
+//                       names PinnedTargetFramework), a15-pml (an empty Zz.paml in the project
+//                       folder), a15-axu (an empty Zz.AXAML), a15-axb (an empty Zz\bin\Zz.axaml),
+//                       a15-avxr (GREEN: <AvaloniaXaml Remove="x.axaml"/>)
 //   using static        a7-uss (using static BroChoos.App.Tests.CultureGate;), a7-usg (<Using
 //                       Include="..CultureGate" Static="true">), a7-bare (bare Gate outside the
 //                       class), a9-usm (<Using Include="System.Math" Static="true">), a10-ul
@@ -436,6 +441,10 @@ public sealed class CultureGateInvariantTests(ITestOutputHelper output)
 		"TargetPlatformVersion", "UseMaui", "UseRazorSourceGenerator", "UseWPF", "UseWindowsForms",
 		"UsingMicrosoftNETSdkBlazorWebAssembly", "UsingMicrosoftNETSdkRazor", "UsingMicrosoftNETSdkWeb",
 	];
+
+	// The file globs of the AvaloniaXaml items in Avalonia 11.3.18's
+	// buildTransitive\AvaloniaBuildTasks.props (**\*.axaml and **\*.paml).
+	private static readonly string[] AvaloniaXamlPatterns = ["*.axaml", "*.paml"];
 
 	// The one target framework the CI builds App.Tests for (BroChoos.App.Tests.csproj). Any
 	// <TargetFramework> or <TargetFrameworks> in the scanned files must be exactly this, so a
@@ -1301,13 +1310,18 @@ public sealed class CultureGateInvariantTests(ITestOutputHelper output)
 			violations.Add($"{Path.GetRelativePath(root, rsp)}: a Directory.Build.rsp could set MSBuild properties the scan cannot see; remove it");
 		}
 
-		// Avalonia's default globs pick up **\*.axaml with no item in the scanned files, and XamlIl
-		// and Avalonia.Generators compile each one into code the scan cannot see. App.Tests has none.
-		foreach (string axaml in Directory.EnumerateFiles(project, "*.axaml", SearchOption.AllDirectories)
+		// Avalonia's default globs (AvaloniaBuildTasks.props in Avalonia 11.3.18) pick up
+		// **\*.axaml and **\*.paml with no item in the scanned files, and XamlIl and
+		// Avalonia.Generators compile each one into code the scan cannot see. App.Tests has none.
+		// The extension match ignores case on Windows only because EnumerateFiles follows the
+		// file system there; MSBuild's globs ignore case on Windows too. CI runs only on
+		// windows-2022, and on Linux both the globs and this scan are case-sensitive, so they agree.
+		foreach (string xaml in AvaloniaXamlPatterns
+			.SelectMany(pattern => Directory.EnumerateFiles(project, pattern, SearchOption.AllDirectories))
 			.Where(path => Path.GetRelativePath(project, path).Split(Path.DirectorySeparatorChar) is var segments
 				&& !(segments.Length > 1 && segments[0] is "bin" or "obj")))
 		{
-			violations.Add($"{Path.GetRelativePath(root, axaml)}: an Avalonia .axaml file is not allowed in this project: XamlIl and Avalonia.Generators would compile it into code the scan cannot see");
+			violations.Add($"{Path.GetRelativePath(root, xaml)}: an Avalonia {Path.GetExtension(xaml)} file is not allowed in this project: XamlIl and Avalonia.Generators would compile it into code the scan cannot see");
 		}
 
 		foreach (string msbuild in MsBuildFiles(root, project))
@@ -1369,8 +1383,7 @@ public sealed class CultureGateInvariantTests(ITestOutputHelper output)
 				// defines itself. A DefineConstants value may keep the inherited
 				// $(DefineConstants) and name DEBUG or TRACE; any other part (a new symbol, or a
 				// computed value) is a violation.
-				if (element.Parent is { } defineGroup && MsBuildName(defineGroup.Name.LocalName, "PropertyGroup")
-					&& MsBuildName(element.Name.LocalName, "DefineConstants")
+				if (inPropertyGroup && MsBuildName(element.Name.LocalName, "DefineConstants")
 					&& element.Value.Split([';', ',']).Select(part => part.Trim())
 						.Any(part => part.Length > 0 && part != "$(DefineConstants)" && !KnownSymbols.Contains(part, StringComparer.Ordinal)))
 				{
@@ -1426,7 +1439,7 @@ public sealed class CultureGateInvariantTests(ITestOutputHelper output)
 						violations.Add($"{where}: an MSBuild <{element.Name.LocalName}> item ({element}) is not allowed in the scanned MSBuild files: XAML markup compilation would generate code into obj\\*.g.cs, which the scan does not read");
 						break;
 					// Avalonia's XamlIl compiler and Avalonia.Generators compile these items into
-					// code the scan cannot see (the .axaml files themselves are checked below).
+					// code the scan cannot see (the .axaml and .paml files themselves are checked above).
 					case "AvaloniaXaml" or "AvaloniaResource" when !IsPureRemove(element):
 						violations.Add($"{where}: an MSBuild <{element.Name.LocalName}> item ({element}) is not allowed in the scanned MSBuild files: Avalonia XamlIl and Avalonia.Generators would compile it into code the scan cannot see");
 						break;
