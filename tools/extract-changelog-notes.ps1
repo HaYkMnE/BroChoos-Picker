@@ -6,7 +6,9 @@ param(
 	[Parameter(Mandatory = $true)]
 	[string]$OutFile,
 
-	[string]$ChangelogPath = (Join-Path (Split-Path -Parent $PSScriptRoot) 'CHANGELOG.md'),
+	# Default (repository-root CHANGELOG.md) is resolved in the body: under Windows PowerShell 5.1
+	# -File, this advanced script's param default saw an empty $PSScriptRoot.
+	[string]$ChangelogPath = '',
 
 	[string]$Repository = 'HaYkMnE/BroChoos-Picker'
 )
@@ -20,6 +22,10 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+
+if ([string]::IsNullOrEmpty($ChangelogPath)) {
+	$ChangelogPath = Join-Path (Split-Path -Parent $PSScriptRoot) 'CHANGELOG.md'
+}
 
 function Get-ChangelogSection {
 	param(

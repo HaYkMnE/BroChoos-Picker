@@ -590,6 +590,18 @@ public sealed partial class ReleasePipelineTests
 		}
 	}
 
+	// Mirrors the release.yml step: repository root as working directory, a relative -File path
+	// and no -ChangelogPath, so the default must resolve to the repository CHANGELOG.md.
+	[Fact]
+	public void ChangelogNotes_DefaultPath_ReadsTheRepositoryChangelog()
+	{
+		string notes = RunNotesExtractor("1.0.0", changelog: null, ciInvocation: true);
+
+		_ = notes.Should().NotStartWith("BroChoos Picker 1.0.0 for Windows 10 and 11 (x64).");
+		_ = notes.Split('\n').Should().Contain("Initial public release.",
+			"the notes must carry the CHANGELOG.md 1.0.0 section");
+	}
+
 	private static string ReadRepositoryFile(string relativePath)
 	{
 		return File.ReadAllText(Path.Combine(RepositoryRoot, relativePath));
@@ -670,7 +682,7 @@ public sealed partial class ReleasePipelineTests
 		return string.Join('\n', lines[start..end]).TrimEnd();
 	}
 
-	private static string RunNotesExtractor(string version, string? changelog)
+	private static string RunNotesExtractor(string version, string? changelog, bool ciInvocation = false)
 	{
 		string work = Path.Combine(
 			Path.GetTempPath(),
@@ -685,9 +697,10 @@ public sealed partial class ReleasePipelineTests
 			}
 
 			string outFile = Path.Combine(work, "notes.md");
-			string script = Path.Combine(RepositoryRoot, NotesScriptRelativePath);
+			string script = ciInvocation ? NotesScriptRelativePath : Path.Combine(RepositoryRoot, NotesScriptRelativePath);
 			ProcessStartInfo startInfo = new("powershell.exe")
 			{
+				WorkingDirectory = RepositoryRoot,
 				RedirectStandardOutput = true,
 				RedirectStandardError = true,
 				UseShellExecute = false,
@@ -696,7 +709,10 @@ public sealed partial class ReleasePipelineTests
 			// A PowerShell 7 parent leaks its PSModulePath, and Windows PowerShell 5.1 then cannot autoload
 			// its own modules (Microsoft.PowerShell.Security). Absent, 5.1 rebuilds its default path.
 			_ = startInfo.Environment.Remove("PSModulePath");
-			string[] arguments = ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script, "-Version", version, "-OutFile", outFile, "-ChangelogPath", changelogPath];
+			// The CI form is the release.yml command line; only -OutFile points outside the repository.
+			string[] arguments = ciInvocation
+				? ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script, "-Version", version, "-OutFile", outFile, "-Repository", "HaYkMnE/BroChoos-Picker"]
+				: ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script, "-Version", version, "-OutFile", outFile, "-ChangelogPath", changelogPath];
 			foreach (string argument in arguments)
 			{
 				startInfo.ArgumentList.Add(argument);
